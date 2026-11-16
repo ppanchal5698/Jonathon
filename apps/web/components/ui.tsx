@@ -12,7 +12,7 @@ export function cx(...c: (string | false | null | undefined)[]) {
 export function Button({ variant = "primary", className, ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" | "ghost" }) {
   const styles = {
     primary: "bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-indigo-300",
-    secondary: "bg-white text-slate-800 ring-1 ring-slate-300 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-600",
+    secondary: "bg-white text-slate-800 ring-1 ring-slate-300 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-600 dark:hover:bg-slate-700",
     danger: "bg-red-600 text-white hover:bg-red-700 disabled:bg-red-300",
     ghost: "text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-slate-800",
   }[variant];

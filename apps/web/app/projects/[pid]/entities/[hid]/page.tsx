@@ -33,6 +33,7 @@ function EntityBody() {
   const [error, setError] = useState<ApiError | null>(null);
   const [editing, setEditing] = useState(false);
   const reload = () => {
+    setError(null);
     void e.reload();
     void history.reload();
   };
@@ -83,9 +84,9 @@ function EntityBody() {
           <Diff pid={pid} hid={hid} revisions={history.data?.revisions ?? []} />
         </div>
         <div className="space-y-4">
-          <Review pid={pid} ent={ent} proposedCount={proposed.length} onDone={reload} onError={setError} />
-          {ent.entity_type === "conflict" && ent.status === "open" && <ResolveConflict pid={pid} ent={ent} onDone={reload} onError={setError} />}
-          {ent.entity_type === "open_question" && ent.status === "open" && <AnswerQuestion pid={pid} ent={ent} onDone={reload} onError={setError} />}
+          <Review key={`review-${ent.revision}`} pid={pid} ent={ent} proposedCount={proposed.length} onDone={reload} onError={setError} />
+          {ent.entity_type === "conflict" && ent.status === "open" && <ResolveConflict key={`resolve-${ent.revision}`} pid={pid} ent={ent} onDone={reload} onError={setError} />}
+          {ent.entity_type === "open_question" && ent.status === "open" && <AnswerQuestion key={`answer-${ent.revision}`} pid={pid} ent={ent} onDone={reload} onError={setError} />}
           <Card title="History">
             <ul className="space-y-1 text-xs">
               {history.data?.events.map((ev) => (
@@ -105,6 +106,22 @@ function tabFor(t: string) {
   return { requirement: "requirements", decision: "decisions", conflict: "conflicts", open_question: "questions", change_proposal: "proposals" }[t] ?? "overview";
 }
 
+const ENTITY_ID = /^(REQ|DEC|QUESTION|CONFLICT|CHANGE)-\d{3,6}$/;
+
+function FieldValue({ pid, value }: { pid: string; value: unknown }) {
+  const items = Array.isArray(value) ? value.map(String) : [String(value)];
+  return (
+    <>
+      {items.map((v, i) => (
+        <span key={v + i}>
+          {i > 0 && ", "}
+          {ENTITY_ID.test(v) ? <A href={`/projects/${pid}/entities/${v}`} className="font-mono">{v}</A> : v}
+        </span>
+      ))}
+    </>
+  );
+}
+
 function Fields({ ent }: { ent: KnowledgeEntity }) {
   const entries = Object.entries(ent.fields).filter(([, v]) => v !== null && !(Array.isArray(v) && v.length === 0) && v !== "");
   if (!entries.length) return null;
@@ -113,7 +130,7 @@ function Fields({ ent }: { ent: KnowledgeEntity }) {
       {entries.map(([k, v]) => (
         <div key={k} className="contents">
           <dt className="text-slate-500">{k.replace(/_/g, " ")}</dt>
-          <dd>{Array.isArray(v) ? v.join(", ") : String(v)}</dd>
+          <dd><FieldValue pid={ent.project_id} value={v} /></dd>
         </div>
       ))}
     </dl>
@@ -156,7 +173,7 @@ function Review({ pid, ent, proposedCount, onDone, onError }: { pid: string; ent
   const [to, setTo] = useState(options[0] ?? "");
   const [confirm, setConfirm] = useState("");
   const [note, setNote] = useState("");
-  if (!options.length && proposedCount === 0) return null;
+  if (!options.length && (proposedCount === 0 || !["draft", "in_review"].includes(ent.status))) return null;
   const verb = VERB[to];
   const phrase = verb ? `${verb} ${ent.human_id}` : "";
   const submit = async (e: FormEvent) => {
@@ -171,7 +188,7 @@ function Review({ pid, ent, proposedCount, onDone, onError }: { pid: string; ent
   };
   return (
     <Card title="Review">
-      {proposedCount > 0 && (
+      {proposedCount > 0 && ["draft", "in_review"].includes(ent.status) && (
         <div className="mb-3 rounded-md bg-amber-50 p-2 text-sm dark:bg-amber-950">
           <p>{proposedCount} AI-proposed statement(s) are not reviewed. Edit or remove the ones you disagree with, then accept the rest. Approval is blocked until then.</p>
           <Button className="mt-2" variant="secondary" onClick={async () => {

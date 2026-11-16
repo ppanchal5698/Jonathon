@@ -4,8 +4,18 @@
     {
       "name": "jonathon",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev"],
+      "runtimeArgs": [
+        "dev"
+      ],
       "port": 3000
+    },
+    {
+      "name": "jonathon-qa",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "scripts/qa.mjs"
+      ],
+      "port": 3191
     }
   ]
 }

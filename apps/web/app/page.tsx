@@ -48,7 +48,7 @@ function DashboardBody() {
             <Empty title="No projects yet">Create a project, then upload client documents into it.</Empty>
           )}
         </Card>
-        <Card title={`Pending review (${pending.data?.length ?? 0})`}>
+        <Card title={`Pending review${pending.data ? ` (${pending.data.length})` : ""}`}>
           <ErrorBanner error={pending.error} />
           {pending.data?.length ? (
             <ul className="space-y-1 text-sm">

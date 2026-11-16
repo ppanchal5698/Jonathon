@@ -188,6 +188,12 @@ describe("MCP server (real MCP SDK client over Streamable HTTP)", () => {
     expect((denied.body.error as { code: string }).code).toBe("FORBIDDEN");
     await c.close();
     const t2 = (await api("POST", "/api/v1/mcp/tokens", { name: "claude-propose", project_ids: [demoPid], scopes: ["read", "propose"] })).json?.data as { token: string };
+    // Rotation keeps the original lifetime (a 30-day token must not become permanent).
+    const t30 = (await api("POST", "/api/v1/mcp/tokens", { name: "short", project_ids: [demoPid], scopes: ["read"], expires_in_days: 30 })).json?.data as { id: string };
+    const rotated = (await api("POST", `/api/v1/mcp/tokens/${t30.id}/rotate`, {})).json?.data as { id: string };
+    const row = app.ctx.db.prepare("SELECT created_at, expires_at FROM mcp_tokens WHERE id = ?").get(rotated.id) as { created_at: string; expires_at: string | null };
+    expect(row.expires_at).not.toBeNull();
+    expect(Math.round((Date.parse(row.expires_at!) - Date.parse(row.created_at)) / 86_400_000)).toBe(30);
     const c2 = await mcpClient(t2.token);
     const rev = (toolJson(await c2.callTool({ name: "get_requirement", arguments: { project_id: demoPid, requirement_id: "REQ-001" } })).body.entity as { revision: number }).revision;
     const ok = toolJson(await c2.callTool({ name: "propose_requirement_change", arguments: { project_id: demoPid, requirement_id: "REQ-001", base_revision: rev, proposed_change: "Add rate limit.", rationale: "Abuse.", request_id: "prop-0002" } }));

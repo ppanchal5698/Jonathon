@@ -68,14 +68,29 @@ function Conversation({ pid, conversationId, onCreated }: { pid: string; convers
   const [text, setText] = useState("");
   const [scope, setScope] = useState("");
   const [pendingJob, setPendingJob] = useState<Job | null>(null);
+  /** Job of an unanswered question whose job ended without an answer (failed/cancelled): offer Retry. */
+  const [stuckJobId, setStuckJobId] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [drawer, setDrawer] = useState<{ answer: Answer; citationId: string } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * Load the conversation from the server. If the latest question is still unanswered, look up its job and resume
+   * progress polling, so a remount (first question creates the conversation) or a page reload never loses it.
+   */
   const load = async (id: string) => {
-    const d = await get<{ messages: Msg[]; knowledge_revision: number }>(`/projects/${pid}/conversations/${id}`);
+    const d = await get<{ messages: Msg[]; knowledge_revision: number; conversation: { feature_scope: string | null } }>(`/projects/${pid}/conversations/${id}`);
     setMessages(d.messages);
     setKr(d.knowledge_revision);
+    if (d.conversation.feature_scope) setScope((s) => s || d.conversation.feature_scope!);
+    const lastUser = [...d.messages].reverse().find((m) => m.role === "user");
+    if (lastUser?.status === "pending" && lastUser.job_id) {
+      const r = await get<{ job: Job }>(`/projects/${pid}/jobs/${lastUser.job_id}`);
+      if (["queued", "running", "retrying"].includes(r.job.status)) {
+        setPendingJob(r.job);
+        setStuckJobId(null);
+      } else if (r.job.status === "failed" || r.job.status === "cancelled") setStuckJobId(r.job.id);
+    } else setStuckJobId(null);
   };
   useEffect(() => {
     if (conversationId) void load(conversationId).catch((e) => setError(e));
@@ -121,11 +136,12 @@ function Conversation({ pid, conversationId, onCreated }: { pid: string; convers
         wait_ms: 1_500,
       });
       setText("");
-      if (!conversationId) onCreated(r.conversation_id);
-      if (r.status === "pending") {
-        setPendingJob({ id: (r as { job_id: string }).job_id, status: "queued", progress: null } as Job);
-        await load(r.conversation_id);
-      } else await load(r.conversation_id);
+      if (!conversationId) {
+        // The parent switches to the new conversation; that view reloads it and resumes polling by itself.
+        onCreated(r.conversation_id);
+        return;
+      }
+      await load(r.conversation_id);
     } catch (err) {
       setError(err as ApiError);
     }
@@ -135,8 +151,13 @@ function Conversation({ pid, conversationId, onCreated }: { pid: string; convers
     if (pendingJob) await post(`/projects/${pid}/jobs/${pendingJob.id}/cancel`).catch((e) => setError(e));
   };
   const retry = async (jobId: string) => {
-    await post(`/projects/${pid}/jobs/${jobId}/retry`).catch((e) => setError(e));
-    setPendingJob({ id: jobId, status: "queued", progress: null } as Job);
+    try {
+      setPendingJob(await post<Job>(`/projects/${pid}/jobs/${jobId}/retry`));
+      setStuckJobId(null);
+      setError(null);
+    } catch (e) {
+      setError(e as ApiError);
+    }
   };
 
   return (
@@ -151,7 +172,7 @@ function Conversation({ pid, conversationId, onCreated }: { pid: string; convers
               {m.role === "user" ? (
                 <>
                   <p className="whitespace-pre-wrap text-sm">{m.content}</p>
-                  {m.status === "pending" && m.job_id && !pendingJob && (
+                  {m.job_id && m.job_id === stuckJobId && !pendingJob && (
                     <Button variant="ghost" className="mt-1" onClick={() => retry(m.job_id!)}>Retry this question</Button>
                   )}
                 </>

@@ -86,14 +86,14 @@ export async function seedDemoProject(app: JonathonApp, user: Extract<Principal,
   const project = app.projects.create(user, {
     name: "Larkspur customer portal (DEMO, fictional)",
     description: "Fictional demonstration project. Larkspur Home Services is not a real company. Shows evidence, drafts, approvals, a conflict, an unresolved rule and a prompt-injection document.",
-    ai_enabled: true,
+    // AI stays off while seeding so ingestion never queues AI interpretation (a running worker would otherwise claim
+    // those jobs before they could be cancelled). It is switched on at the end.
+    ai_enabled: false,
     is_demo: true,
   });
   const pid = project.id;
   for (const f of await demoSourceFiles()) app.sources.ingest(user, pid, { filename: f.filename, bytes: f.bytes });
   await drainJobs(app, ["ingest"]);
-  // Do not run AI interpretation jobs during seeding.
-  for (const j of app.ctx.queue.list({ projectId: pid })) if (j.type === "extract_knowledge" && j.status === "queued") app.ctx.queue.requestCancel(j.id);
 
   const k = app.knowledge;
   const r1 = k.createDraft(user, pid, "requirement", {
@@ -180,5 +180,6 @@ export async function seedDemoProject(app: JonathonApp, user: Extract<Principal,
     },
     source_refs: refFor(app, pid, "how long the verification link stays valid"),
   });
+  app.projects.update(user, pid, { ai_enabled: true });
   return { projectId: pid };
 }

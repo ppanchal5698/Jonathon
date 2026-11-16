@@ -159,6 +159,8 @@ describe("security and evaluation cases", () => {
     expect(a.conflicts.some((c) => c.conflict_id === "CONFLICT-001")).toBe(true);
     expect(a.implementation_ready).toBe(false);
     expect(a.readiness_reasons.join(" ")).toMatch(/CONFLICT-001/);
+    // QUESTION-001 blocks email-verification, not account-registration: readiness is feature-scoped.
+    expect(a.readiness_reasons.join(" ")).not.toMatch(/QUESTION-001/);
     const spec = t.app.knowledge.featureSpec(USER, pid, "email-verification");
     expect(spec.requirements.map((r) => r.human_id)).toEqual(["REQ-001"]);
     expect(spec.implementation_ready).toBe(false);

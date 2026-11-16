@@ -155,16 +155,19 @@ export class AuthService {
   }
 
   rotateMcpToken(principal: Principal, tokenId: string): { id: string; token: string; prefix: string } {
-    const t = one<{ name: string; scopes: string; project_ids: string; expires_at: string | null; revoked_at: string | null }>(
+    const t = one<{ name: string; scopes: string; project_ids: string; created_at: string; expires_at: string | null; revoked_at: string | null }>(
       this.db,
       "SELECT * FROM mcp_tokens WHERE id = ?",
       tokenId,
     );
     if (!t || t.revoked_at) throw new AppError("NOT_FOUND", "token not found or already revoked");
+    // The replacement keeps the original lifetime; rotating must never turn an expiring token into a permanent one.
+    const lifetimeDays = t.expires_at ? Math.max(1, Math.ceil((Date.parse(t.expires_at) - Date.parse(t.created_at)) / 86_400_000)) : undefined;
     const created = this.createMcpToken(principal, {
       name: t.name,
       projectIds: parseJson(t.project_ids, []),
       scopes: parseJson(t.scopes, []),
+      expiresInDays: lifetimeDays,
       rotatedFrom: tokenId,
     });
     this.revokeMcpToken(principal, tokenId);

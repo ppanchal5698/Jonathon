@@ -22,6 +22,8 @@ const env = {
   AGY_PATH: process.execPath,
   AGY_ARGS_PREFIX_JSON: JSON.stringify([join(process.cwd(), "packages/test-fixtures/runtime/fake-agy.mjs"), "--scenario", "answer-cite", "--"]),
   JONATHON_API_URL: `http://127.0.0.1:${API_PORT}`,
+  // Own build folder so e2e never collides with a running `pnpm dev`.
+  JONATHON_NEXT_DIST_DIR: ".next-e2e",
 };
 
 export default defineConfig({

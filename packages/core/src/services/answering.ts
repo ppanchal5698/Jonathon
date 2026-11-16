@@ -60,6 +60,8 @@ interface ContextItem extends PromptEvidence {
   contentHash: string;
   fullText: string;
   blockingOpen: boolean;
+  /** Feature scopes of the knowledge entity (empty for source evidence or unscoped entities). */
+  scopes: string[];
 }
 
 function authorityOf(kind: string, entityType: string, status: string | null, approvalValid: boolean | null): string {
@@ -487,6 +489,7 @@ export class AnswerService {
         contentHash: "",
         fullText: h.text,
         blockingOpen: !!ent && ["conflict", "open_question"].includes(ent.entity_type) && ent.status === "open" && ent.fields.blocking === true,
+        scopes: Array.isArray(ent?.fields.feature_scopes) ? (ent!.fields.feature_scopes as string[]).map((x) => x.toLowerCase()) : [],
       });
     }
     return items;
@@ -637,9 +640,12 @@ export class AnswerService {
     const requirementIds = [...new Set(known(turn.requirement_ids, "requirement"))];
     const decisionIds = [...new Set(known(turn.decision_ids, "decision"))];
 
+    // Every model-written text refers to prompt-internal E-ids; map them to this answer's citation ids.
+    const rewrite = (t: string) => rewriteEvidenceRefs(t, byId, evidenceToCitation);
+
     // Conflicts: the model's, plus every open conflict that was in the evidence (never hidden).
     const conflicts = turn.conflicts.map((c) => ({
-      summary: c.summary,
+      summary: rewrite(c.summary),
       citation_ids: c.evidence_ids.map((e) => evidenceToCitation.get(e.trim().toUpperCase())).filter((x): x is string => !!x),
       conflict_id: null as string | null,
     }));
@@ -663,7 +669,8 @@ export class AnswerService {
     if (!turn.claims_implementation_ready) reasons.push("The answer does not establish every rule needed to implement this.");
     if (status !== "answered") reasons.push(`Answer status is ${status}.`);
     if (turn.unresolved_questions.length) reasons.push(`${turn.unresolved_questions.length} question(s) remain unresolved.`);
-    for (const it of items.filter((i) => i.blockingOpen)) reasons.push(`Blocking ${it.authority === "open_conflict" ? "conflict" : "question"} ${it.humanId} is open.`);
+    const inScope = (it: ContextItem) => !scope || it.scopes.length === 0 || it.scopes.includes(scope.toLowerCase());
+    for (const it of items.filter((i) => i.blockingOpen && inScope(i))) reasons.push(`Blocking ${it.authority === "open_conflict" ? "conflict" : "question"} ${it.humanId} is open.`);
     if (scope) {
       const blockers = all<{ human_id: string; entity_type: string }>(
         this.ctx.db,
@@ -693,12 +700,12 @@ export class AnswerService {
       message_id: newId("msg"),
       project_id: projectId,
       status,
-      answer_markdown: rewriteEvidenceRefs(turn.answer_markdown, byId, evidenceToCitation),
+      answer_markdown: rewrite(turn.answer_markdown),
       citations,
       requirement_ids: requirementIds,
       decision_ids: decisionIds,
-      inferences: turn.inferences,
-      unresolved_questions: turn.unresolved_questions,
+      inferences: turn.inferences.map(rewrite),
+      unresolved_questions: turn.unresolved_questions.map(rewrite),
       conflicts,
       implementation_ready: ready,
       readiness_scope: scope,

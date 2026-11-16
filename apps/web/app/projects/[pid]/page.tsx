@@ -137,9 +137,12 @@ function Documents({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }) {
   const submitPaste = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await post(`/projects/${pid}/sources/paste`, paste);
+      const r = await post<{ duplicate: boolean }>(`/projects/${pid}/sources/paste`, paste);
+      setNotice(r.duplicate ? `"${paste.title}" has the same text as an existing source; not stored again.` : `"${paste.title}" stored. Extraction is queued.`);
+      setError(null);
       setPaste({ title: "", text: "" });
       void sources.reload();
+      void jobs.reload();
     } catch (err) {
       setError(err as ApiError);
     }
@@ -186,7 +189,7 @@ function Documents({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }) {
         <Card title="Upload">
           <label className="block text-sm">
             <span className="sr-only">Choose files</span>
-            <input ref={fileRef} type="file" multiple disabled={busy} onChange={(e) => upload(e.target.files)} className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-indigo-600 file:px-3 file:py-1.5 file:text-white" />
+            <input ref={fileRef} type="file" multiple disabled={busy} aria-label="Choose files to upload" onChange={(e) => upload(e.target.files)} className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-indigo-600 file:px-3 file:py-1.5 file:text-white" />
           </label>
           <p className="mt-2 text-xs text-slate-500">TXT, Markdown, PDF (text), DOCX, PPTX, CSV, XLSX, JSON, HTML, EML. Other files are preserved and marked unsupported. Images and scanned PDFs need OCR, which is not configured.</p>
           {!aiEnabled && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">AI processing is off: documents are extracted and searchable, but no draft requirements are proposed.</p>}

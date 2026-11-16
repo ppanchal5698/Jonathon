@@ -94,13 +94,14 @@ function McpBody() {
         <Card title="Credentials" className="lg:col-span-2">
           {tokens.data?.length ? (
             <table className="w-full text-sm">
-              <thead className="text-left text-xs text-slate-500"><tr><th>Name</th><th>Scopes</th><th>Projects</th><th>Last used</th><th /></tr></thead>
+              <thead className="text-left text-xs text-slate-500"><tr><th>Name</th><th>Scopes</th><th>Projects</th><th>Expires</th><th>Last used</th><th /></tr></thead>
               <tbody>
                 {tokens.data.map((t) => (
                   <tr key={t.id} className="border-t border-slate-100 align-top dark:border-slate-800">
                     <td className="py-1.5">{t.name} <code className="text-xs text-slate-500">{t.token_prefix}…</code>{t.revoked_at && <> <Badge tone="failed">revoked</Badge></>}</td>
                     <td>{t.scopes.join(", ")}</td>
                     <td className="text-xs">{t.project_ids.map((p) => names.get(p) ?? p).join(", ")}</td>
+                    <td className="text-xs">{t.expires_at ? <Time iso={t.expires_at} /> : "never"}</td>
                     <td className="text-xs"><Time iso={t.last_used_at} /></td>
                     <td className="space-x-1 whitespace-nowrap text-right">
                       <Button variant="ghost" onClick={async () => setLog({ id: t.id, rows: await get(`/mcp/tokens/${t.id}/access`) })}>Access log</Button>

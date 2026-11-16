@@ -10,6 +10,8 @@ const dev = process.env.NODE_ENV !== "production";
 const config: NextConfig = {
   transpilePackages: ["@jonathon/contracts"],
   poweredByHeader: false,
+  // A second instance (scripts/qa.mjs) uses its own build folder so two dev servers never share .next.
+  distDir: /^\.next[\w-]*$/.test(process.env.JONATHON_NEXT_DIST_DIR ?? "") ? process.env.JONATHON_NEXT_DIST_DIR : ".next",
   async rewrites() {
     return [{ source: "/api/v1/:path*", destination: `${API}/api/v1/:path*` }];
   },

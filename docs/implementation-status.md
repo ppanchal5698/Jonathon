@@ -114,3 +114,14 @@ and the `claude mcp add` syntax is from the docs, but no Claude Code session was
 3. Optional OCR adapter (Tesseract) for `needs_ocr` files.
 4. Evaluate retrieval quality on a real client corpus before considering embeddings.
 5. Add claim-support evaluation fixtures with real model output (beyond quote provenance).
+* **8:20–8:40 PM**: manual end-to-end pass in the browser against an isolated QA instance (`scripts/qa.mjs`; fresh data,
+  real agy 1.5.9). Verified: setup, dashboard, demo seed, documents, paste, xlsx locators, byte-exact original download,
+  AI draft review (server-decided basis labels, approval blocked until proposed statements are reviewed), reject,
+  approve, diff, conflict resolution into DEC-002, real cited answers and follow-ups, evidence drawer, MCP credential
+  create/rotate/access log, runtime auth check, reconcile of external edits (approval revoked), rebuild index, backup.
+  Fixed: chat losing the pending job when the first question creates a conversation (now resumes from the server on any
+  reload); stale review form and error after a transition; AI-statement box on rejected items; dark-mode hover making a
+  button unreadable; prompt-internal E-ids leaking into conflict/inference text; readiness counting blockers from other
+  features; MCP token rotation dropping the expiry (security); seed racing a running worker into AI extraction; raw JSON
+  in Operations; stale job progress text; paste without feedback; unlabelled file input; plain-text entity IDs (now links).
+  Known, not fixed: AI extraction can propose near-duplicates of existing requirements (dedupe is by exact title only).

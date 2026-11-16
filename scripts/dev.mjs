@@ -8,10 +8,13 @@ const prod = process.argv.includes("--prod");
 const isWin = process.platform === "win32";
 const pnpm = isWin ? "pnpm.cmd" : "pnpm";
 
+const WEB_PORT = /^\d{2,5}$/.test(process.env.JONATHON_WEB_PORT ?? "") ? process.env.JONATHON_WEB_PORT : "3000";
+const API_PORT = /^\d{2,5}$/.test(process.env.JONATHON_PORT ?? "") ? process.env.JONATHON_PORT : "4100";
+
 const procs = [
   { name: "api", color: 36, args: ["--filter", "@jonathon/server", prod ? "start" : "dev"] },
   { name: "worker", color: 35, args: ["--filter", "@jonathon/server", prod ? "start:worker" : "dev:worker"] },
-  { name: "web", color: 33, args: ["--filter", "@jonathon/web", prod ? "start" : "dev"] },
+  { name: "web", color: 33, args: ["--filter", "@jonathon/web", "exec", "next", prod ? "start" : "dev", "--hostname", "127.0.0.1", "--port", WEB_PORT] },
 ];
 
 const children = procs.map((p) => {
@@ -53,4 +56,4 @@ function shutdown(code = 0) {
 }
 process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
-console.log(`Jonathon ${prod ? "production" : "development"}: UI http://127.0.0.1:3000  API/MCP http://127.0.0.1:4100`);
+console.log(`Jonathon ${prod ? "production" : "development"}: UI http://127.0.0.1:${WEB_PORT}  API/MCP http://127.0.0.1:${API_PORT}`);
