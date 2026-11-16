@@ -125,3 +125,10 @@ and the `claude mcp add` syntax is from the docs, but no Claude Code session was
   features; MCP token rotation dropping the expiry (security); seed racing a running worker into AI extraction; raw JSON
   in Operations; stale job progress text; paste without feedback; unlabelled file input; plain-text entity IDs (now links).
   Known, not fixed: AI extraction can propose near-duplicates of existing requirements (dedupe is by exact title only).
+* **9:00 PM**: UI redesigned with TailAdmin's design system (MIT; see THIRD_PARTY_NOTICES.md), implemented natively with no new
+  dependencies: class-based light/dark/auto theme without flash, collapsible sidebar (projects with their sections, system
+  pages, live status widget) and mobile drawer, sticky header with Ctrl+K project search, theme toggle and account menu,
+  breadcrumbs, metric tiles, bordered tables, pill tabs, split-screen sign-in, drag-and-drop upload, chat bubbles.
+  Also fixed during review: Markdown headings and lists mixed with text (rendered raw before), missing accessible
+  names on sidebar and account controls, cramped MCP credentials table, and the demo seed still racing a separately
+  running worker (it now waits for every ingest job before enabling AI).

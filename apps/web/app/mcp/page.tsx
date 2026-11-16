@@ -3,7 +3,7 @@
 import type { Project } from "@jonathon/contracts";
 import { type FormEvent, useState } from "react";
 import { Shell } from "@/components/shell";
-import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, Time } from "@/components/ui";
+import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, PageHeader, Time, table } from "@/components/ui";
 import { type ApiError, get, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
@@ -56,34 +56,34 @@ function McpBody() {
   };
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold">MCP access for Claude Code</h1>
+    <div className="space-y-4 md:space-y-6">
+      <PageHeader title="MCP access for Claude Code" crumbs={[{ label: "MCP access" }]} />
       {created && (
-        <Card title="New credential (shown once)" className="ring-2 ring-amber-400">
+        <Card title="New credential (shown once)" className="border-amber-500 dark:border-amber-500/40">
           <p className="text-sm">Copy it now. Jonathon stores only a hash and cannot show it again. Keep it out of Git; put it in your shell environment.</p>
-          <pre className="mt-2 overflow-x-auto rounded bg-slate-100 p-2 text-xs dark:bg-slate-800">{`# 1. In your shell (PowerShell: $env:JONATHON_MCP_TOKEN = "...")\nexport JONATHON_MCP_TOKEN="${created.token}"\n\n# 2. Register the server with Claude Code (user scope keeps the token out of the repo)\nclaude mcp add --transport http --scope user jonathon ${created.mcp_url} --header "Authorization: Bearer \${JONATHON_MCP_TOKEN}"`}</pre>
-          <div className="mt-2 flex gap-2">
+          <pre className="custom-scrollbar mt-3 overflow-x-auto rounded-xl bg-gray-900 p-4 text-theme-xs text-gray-100 dark:bg-black/40">{`# 1. In your shell (PowerShell: $env:JONATHON_MCP_TOKEN = "...")\nexport JONATHON_MCP_TOKEN="${created.token}"\n\n# 2. Register the server with Claude Code (user scope keeps the token out of the repo)\nclaude mcp add --transport http --scope user jonathon ${created.mcp_url} --header "Authorization: Bearer \${JONATHON_MCP_TOKEN}"`}</pre>
+          <div className="mt-4 flex gap-3">
             <Button variant="secondary" onClick={() => navigator.clipboard.writeText(created.token)}>Copy token</Button>
             <Button variant="ghost" onClick={() => setCreated(null)}>I stored it</Button>
           </div>
         </Card>
       )}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="Create a scoped credential">
-          <form onSubmit={create} className="space-y-3">
+      <div className="grid grid-cols-12 gap-4 md:gap-6">
+        <Card title="Create a scoped credential" className="col-span-12 lg:col-span-6 xl:col-span-5">
+          <form onSubmit={create} className="space-y-5">
             <Field label="Name">{(id) => <Input id={id} value={name} onChange={(e) => setName(e.target.value)} required />}</Field>
             <fieldset>
-              <legend className="text-sm font-medium">Projects</legend>
+              <legend className="mb-2 text-theme-sm font-medium text-gray-700 dark:text-gray-400">Projects</legend>
               {(projects.data ?? []).map((p) => (
                 <label key={p.id} className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={selected.includes(p.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, p.id] : selected.filter((x) => x !== p.id))} />
                   {p.name}
                 </label>
               ))}
-              {!projects.data?.length && <p className="text-sm text-slate-500">Create a project first.</p>}
+              {!projects.data?.length && <p className="text-sm text-gray-500">Create a project first.</p>}
             </fieldset>
             <label className="flex items-start gap-2 text-sm">
-              <input type="checkbox" checked={propose} onChange={(e) => setPropose(e.target.checked)} className="mt-1" />
+              <input type="checkbox" checked={propose} onChange={(e) => setPropose(e.target.checked)} className="mt-0.5 size-5 shrink-0 cursor-pointer rounded-md accent-brand-500" />
               <span>Allow proposing requirement changes (never approval). Reading is always included.</span>
             </label>
             <Field label="Expires after (days)">{(id) => <Input id={id} type="number" min={1} max={365} value={expires} onChange={(e) => setExpires(e.target.value)} />}</Field>
@@ -91,19 +91,39 @@ function McpBody() {
             <Button type="submit" disabled={!selected.length}>Create credential</Button>
           </form>
         </Card>
-        <Card title="Credentials" className="lg:col-span-2">
+        <Card title="Connect Claude Code" desc="Jonathon serves MCP over Streamable HTTP on this machine only." className="col-span-12 lg:col-span-6 xl:col-span-7">
+          <ol className="space-y-4">
+            {[
+              ["Create a credential", "Pick only the projects this repository needs. Leave proposing off unless Claude Code should file change proposals."],
+              ["Store the token outside Git", "Put it in your shell environment (JONATHON_MCP_TOKEN). It is shown once; Jonathon keeps only a hash."],
+              ["Register the server", "Run the claude mcp add command shown after creation, with user scope."],
+              ["Add repository instructions", "Copy docs/sample-CLAUDE.md into the client repository as CLAUDE.md and set the project ID."],
+            ].map(([t, d], i) => (
+              <li key={t} className="flex gap-3">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-50 text-theme-sm font-semibold text-brand-500 dark:bg-brand-500/15 dark:text-brand-400">{i + 1}</span>
+                <span>
+                  <span className="block text-theme-sm font-medium text-gray-800 dark:text-white/90">{t}</span>
+                  <span className="text-theme-sm text-gray-500 dark:text-gray-400">{d}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+          <p className="mt-5 text-theme-xs text-gray-500 dark:text-gray-400">Tools: list_projects, ask_jonathon, search_knowledge, get_requirement, get_feature_spec, get_job, propose_requirement_change. There is no approval tool.</p>
+        </Card>
+        <Card title="Credentials" className="col-span-12">
           {tokens.data?.length ? (
-            <table className="w-full text-sm">
-              <thead className="text-left text-xs text-slate-500"><tr><th>Name</th><th>Scopes</th><th>Projects</th><th>Expires</th><th>Last used</th><th /></tr></thead>
+            <div className={table.wrap}>
+            <table className={table.table}>
+              <thead className={table.thead}><tr><th className={table.th}>Name</th><th className={table.th}>Scopes</th><th className={table.th}>Projects</th><th className={table.th}>Expires</th><th className={table.th}>Last used</th><th className={table.th}><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {tokens.data.map((t) => (
-                  <tr key={t.id} className="border-t border-slate-100 align-top dark:border-slate-800">
-                    <td className="py-1.5">{t.name} <code className="text-xs text-slate-500">{t.token_prefix}…</code>{t.revoked_at && <> <Badge tone="failed">revoked</Badge></>}</td>
-                    <td>{t.scopes.join(", ")}</td>
-                    <td className="text-xs">{t.project_ids.map((p) => names.get(p) ?? p).join(", ")}</td>
-                    <td className="text-xs">{t.expires_at ? <Time iso={t.expires_at} /> : "never"}</td>
-                    <td className="text-xs"><Time iso={t.last_used_at} /></td>
-                    <td className="space-x-1 whitespace-nowrap text-right">
+                  <tr key={t.id} className={`${table.tr} align-top`}>
+                    <td className={table.td}><span className="font-medium text-gray-800 dark:text-white/90">{t.name}</span> <code className="text-theme-xs text-gray-500">{t.token_prefix}…</code>{t.revoked_at && <> <Badge tone="error">revoked</Badge></>}</td>
+                    <td className={table.td}><div className="flex gap-1">{t.scopes.map((sc) => <Badge key={sc} tone={sc === "propose" ? "warning" : "primary"}>{sc}</Badge>)}</div></td>
+                    <td className={`${table.td} text-theme-xs`}>{t.project_ids.map((p) => names.get(p) ?? p).join(", ")}</td>
+                    <td className={`${table.td} text-theme-xs`}>{t.expires_at ? <Time iso={t.expires_at} /> : "never"}</td>
+                    <td className={`${table.td} text-theme-xs`}><Time iso={t.last_used_at} /></td>
+                    <td className={`${table.td} space-x-1 text-right whitespace-nowrap`}>
                       <Button variant="ghost" onClick={async () => setLog({ id: t.id, rows: await get(`/mcp/tokens/${t.id}/access`) })}>Access log</Button>
                       {!t.revoked_at && (
                         <>
@@ -116,13 +136,14 @@ function McpBody() {
                 ))}
               </tbody>
             </table>
+            </div>
           ) : (
             <Empty title="No credentials" />
           )}
           {log && (
-            <div className="mt-4">
+            <div className="mt-6">
               <h3 className="text-sm font-semibold">Access history</h3>
-              <ul className="mt-1 max-h-72 overflow-auto text-xs">
+              <ul className="custom-scrollbar mt-2 max-h-72 space-y-1 overflow-auto text-theme-xs text-gray-600 dark:text-gray-300">
                 {log.rows.map((r, i) => (
                   <li key={i}><Time iso={r.at} /> · {r.tool} · {r.outcome}{r.error_code ? ` (${r.error_code})` : ""}</li>
                 ))}

@@ -20,7 +20,7 @@ test("full workflow", async ({ page }) => {
   await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await page.getByLabel("Confirm password").fill(PASSWORD);
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
 
   // ---- Create project ----
   await page.getByRole("button", { name: "New project" }).click();
@@ -46,7 +46,7 @@ test("full workflow", async ({ page }) => {
   await expect(page.getByText(/Customers must verify their email address/).first()).toBeVisible();
   await expect(page.getByText(/sha256/).first()).toBeVisible();
   await expect(page.getByRole("link", { name: "Download original" })).toBeVisible();
-  await page.getByRole("link", { name: "← Documents" }).click();
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Documents" }).click();
 
   // ---- Create a draft requirement and approve it ----
   await page.getByRole("tab", { name: "Requirements" }).click();

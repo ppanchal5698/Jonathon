@@ -5,21 +5,13 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, Suspense, useRef, useState } from "react";
 import { Chat } from "@/components/chat";
 import { Shell } from "@/components/shell";
-import { A, Badge, Button, Card, cx, Empty, ErrorBanner, Field, Input, Loading, Select, Textarea, Time } from "@/components/ui";
+import { ActivityIcon, AlertIcon, ChatIcon, ChecklistIcon, DocumentIcon, QuestionIcon, UploadIcon } from "@/components/icons";
+import { PROJECT_SECTIONS } from "@/components/shell";
+import { A, Badge, Button, Card, Empty, ErrorBanner, Field, Input, Loading, Notice, PageHeader, Select, StatCard, Tabs, Textarea, Time, table } from "@/components/ui";
 import { type ApiError, api, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
-const TABS = [
-  ["overview", "Overview"],
-  ["documents", "Documents"],
-  ["requirements", "Requirements"],
-  ["decisions", "Decisions"],
-  ["conflicts", "Conflicts"],
-  ["questions", "Open questions"],
-  ["proposals", "Proposals"],
-  ["chat", "Chat"],
-  ["settings", "Settings"],
-] as const;
+const TABS = PROJECT_SECTIONS.map(([key, label]) => [key, label] as const);
 
 export default function ProjectPage() {
   return (
@@ -42,19 +34,18 @@ function ProjectBody() {
   if (project.error) return <ErrorBanner error={project.error} />;
   if (!project.data) return <Loading />;
   const p = project.data;
+  const tabLabel = TABS.find(([k]) => k === tab)?.[1] ?? "Overview";
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold">{p.name} {p.is_demo && <Badge tone="needs_ocr">demo, fictional</Badge>}</h1>
-        <p className="text-sm text-slate-500">Knowledge revision {p.knowledge_revision} · AI processing {p.ai_enabled ? "on" : "off"}</p>
-      </div>
-      <div role="tablist" aria-label="Project sections" className="flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-800">
-        {TABS.map(([key, label]) => (
-          <button key={key} role="tab" type="button" aria-selected={tab === key} onClick={() => router.replace(`/projects/${pid}?tab=${key}`)}
-            className={cx("-mb-px border-b-2 px-3 py-1.5 text-sm", tab === key ? "border-indigo-600 font-medium" : "border-transparent text-slate-600 hover:text-slate-900 dark:text-slate-300")}>
-            {label}
-          </button>
-        ))}
+    <>
+      <PageHeader title={p.name} crumbs={[{ label: p.name, href: `/projects/${pid}` }, { label: tabLabel }]}>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {p.is_demo && <Badge tone="primary">demo, fictional</Badge>}
+          <Badge tone={p.ai_enabled ? "success" : "gray"}>{p.ai_enabled ? "AI processing on" : "AI processing off"}</Badge>
+          <span className="text-theme-sm text-gray-500 dark:text-gray-400">Knowledge revision {p.knowledge_revision}</span>
+        </div>
+      </PageHeader>
+      <div className="mb-6">
+        <Tabs label="Project sections" tabs={TABS} active={tab} onChange={(key) => router.replace(`/projects/${pid}?tab=${key}`)} />
       </div>
       <div role="tabpanel">
         {tab === "overview" && <Overview project={p} />}
@@ -67,41 +58,45 @@ function ProjectBody() {
         {tab === "chat" && <Chat pid={pid} />}
         {tab === "settings" && <Settings project={p} onSaved={() => project.reload()} />}
       </div>
-    </div>
+    </>
   );
 }
 
 function Overview({ project }: { project: ProjectWithCounts }) {
   const activity = useApi<Array<Record<string, any>>>(`/projects/${project.id}/activity`);
   const c = project.counts;
-  const stats: [string, number, string][] = [
-    ["Documents", c.sources ?? 0, "documents"],
-    ["Requirements", c.requirements ?? 0, "requirements"],
-    ["Approved", c.approved ?? 0, "requirements"],
-    ["Open conflicts", c.open_conflicts ?? 0, "conflicts"],
-    ["Open questions", c.open_questions ?? 0, "questions"],
-    ["Active jobs", c.active_jobs ?? 0, "documents"],
-  ];
+  const base = `/projects/${project.id}?tab=`;
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <Card title="Summary" className="lg:col-span-2">
-        <p className="mb-3 whitespace-pre-wrap text-sm">{project.description || "No description."}</p>
-        <div className="grid grid-cols-3 gap-3">
-          {stats.map(([label, n, tab]) => (
-            <A key={label} href={`/projects/${project.id}?tab=${tab}`} className="rounded-md bg-slate-50 p-3 no-underline dark:bg-slate-800">
-              <span className="block text-2xl font-semibold text-slate-900 dark:text-slate-100">{n}</span>
-              <span className="text-xs">{label}</span>
-            </A>
-          ))}
-        </div>
-      </Card>
-      <Card title="Recent activity">
-        <ul className="space-y-1 text-xs">
-          {(activity.data ?? []).slice(0, 15).map((a) => (
-            <li key={a.id}><Time iso={a.at} /> · {a.action} {a.entity_id ?? ""}</li>
-          ))}
-        </ul>
-      </Card>
+    <div className="space-y-4 md:space-y-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:gap-6 xl:grid-cols-3">
+        <StatCard icon={<DocumentIcon />} label="Documents" value={c.sources ?? 0} href={`${base}documents`} />
+        <StatCard icon={<ChecklistIcon />} label="Requirements" value={c.requirements ?? 0} href={`${base}requirements`} footer={<Badge tone="success">{`${c.approved ?? 0} approved`}</Badge>} />
+        <StatCard icon={<ActivityIcon />} label="Active jobs" value={c.active_jobs ?? 0} href={`${base}documents`} />
+        <StatCard icon={<AlertIcon />} label="Open conflicts" value={c.open_conflicts ?? 0} href={`${base}conflicts`} footer={c.open_conflicts ? <Badge tone="orange">needs a decision</Badge> : null} />
+        <StatCard icon={<QuestionIcon />} label="Open questions" value={c.open_questions ?? 0} href={`${base}questions`} />
+        <StatCard icon={<ChatIcon />} label="Ask about this project" value="Chat" href={`${base}chat`} />
+      </div>
+      <div className="grid grid-cols-12 gap-4 md:gap-6">
+        <Card title="Summary" className="col-span-12 xl:col-span-7">
+          <p className="text-theme-sm whitespace-pre-wrap text-gray-600 dark:text-gray-300">{project.description || "No description."}</p>
+        </Card>
+        <Card title="Recent activity" className="col-span-12 xl:col-span-5">
+          <ol className="relative space-y-4 border-l border-gray-200 pl-5 dark:border-gray-800">
+            {(activity.data ?? []).slice(0, 12).map((a) => (
+              <li key={a.id} className="relative">
+                <span className="absolute top-1.5 -left-[25px] size-2.5 rounded-full border-2 border-white bg-brand-500 dark:border-gray-900" aria-hidden="true" />
+                <p className="text-theme-sm text-gray-800 dark:text-white/90">
+                  {a.action.replace(/[._]/g, " ")}
+                  {a.entity_id ? <span className="font-mono text-gray-500 dark:text-gray-400"> {a.entity_id}</span> : null}
+                </p>
+                <p className="text-theme-xs text-gray-500 dark:text-gray-400">
+                  <Time iso={a.at} />
+                </p>
+              </li>
+            ))}
+          </ol>
+        </Card>
+      </div>
     </div>
   );
 }
@@ -112,15 +107,17 @@ function Documents({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [paste, setPaste] = useState({ title: "", text: "" });
 
-  const upload = async (files: FileList | null) => {
-    if (!files?.length) return;
+  const upload = async (files: FileList | File[] | null) => {
+    const list = files ? Array.from(files) : [];
+    if (!list.length) return;
     setBusy(true);
     setError(null);
     const form = new FormData();
-    for (const f of Array.from(files)) form.append("files", f, f.name);
+    for (const f of list) form.append("files", f, f.name);
     try {
       const r = await api<{ duplicate: boolean; source: Source }[]>("POST", `/projects/${pid}/sources`, form);
       const dups = r.filter((x) => x.duplicate).map((x) => x.source.display_name);
@@ -150,54 +147,120 @@ function Documents({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }) {
   const active = (jobs.data ?? []).filter((j) => ["queued", "running", "retrying"].includes(j.status));
 
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <div className="space-y-4 lg:col-span-2">
-        <Card title="Documents">
+    <div className="grid grid-cols-12 gap-4 md:gap-6">
+      <div className="col-span-12 space-y-4 md:space-y-6 xl:col-span-8">
+        <Card title="Documents" desc="Originals are kept byte-for-byte; each upload of changed content becomes a new revision.">
           <ErrorBanner error={sources.error} />
           {sources.data?.length ? (
-            <table className="w-full text-sm">
-              <thead className="text-left text-xs text-slate-500">
-                <tr><th className="py-1">Name</th><th>Status</th><th>Chunks</th><th>Rev.</th><th>Added</th></tr>
-              </thead>
-              <tbody>
-                {sources.data.map((s) => (
-                  <tr key={s.id} className="border-t border-slate-100 dark:border-slate-800">
-                    <td className="py-1.5"><A href={`/projects/${pid}/sources/${s.id}`}>{s.display_name}</A></td>
-                    <td><Badge>{s.current?.extraction_status ?? "pending"}</Badge></td>
-                    <td>{s.current?.chunk_count ?? 0}</td>
-                    <td>{s.current?.revision_number}</td>
-                    <td className="text-xs"><Time iso={s.created_at} /></td>
+            <div className={table.wrap}>
+              <table className={table.table}>
+                <thead className={table.thead}>
+                  <tr>
+                    <th className={table.th}>Name</th>
+                    <th className={table.th}>Status</th>
+                    <th className={table.th}>Chunks</th>
+                    <th className={table.th}>Rev.</th>
+                    <th className={table.th}>Added</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {sources.data.map((s) => (
+                    <tr key={s.id} className={table.tr}>
+                      <td className={table.td}>
+                        <div className="flex items-center gap-3">
+                          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                            <DocumentIcon className="size-5" />
+                          </span>
+                          <A href={`/projects/${pid}/sources/${s.id}`} className="truncate text-gray-800 dark:text-white/90">
+                            {s.display_name}
+                          </A>
+                        </div>
+                      </td>
+                      <td className={table.td}>
+                        <Badge>{s.current?.extraction_status ?? "pending"}</Badge>
+                      </td>
+                      <td className={table.td}>{s.current?.chunk_count ?? 0}</td>
+                      <td className={table.td}>{s.current?.revision_number}</td>
+                      <td className={`${table.td} text-theme-xs`}>
+                        <Time iso={s.created_at} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
-            !sources.loading && <Empty title="No documents yet">Upload requirement documents, PDFs, spreadsheets, emails or notes.</Empty>
+            !sources.loading && (
+              <Empty title="No documents yet" icon={<DocumentIcon />}>
+                Upload requirement documents, PDFs, spreadsheets, emails or notes.
+              </Empty>
+            )
           )}
         </Card>
         {active.length > 0 && (
           <Card title="Processing">
-            <ul className="space-y-1 text-sm" aria-live="polite">
+            <ul className="space-y-3" aria-live="polite">
               {active.map((j) => (
-                <li key={j.id}><Badge>{j.status}</Badge> {j.type} {j.progress ? `· ${j.progress.stage}${j.progress.detail ? ` (${j.progress.detail})` : ""}` : ""}</li>
+                <li key={j.id} className="flex items-center gap-3 text-theme-sm">
+                  <span className="size-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" aria-hidden="true" />
+                  <Badge>{j.status}</Badge>
+                  <span className="text-gray-700 dark:text-gray-300">
+                    {j.type.replace("_", " ")}
+                    {j.progress ? ` · ${j.progress.stage}${j.progress.detail ? ` (${j.progress.detail})` : ""}` : ""}
+                  </span>
+                </li>
               ))}
             </ul>
           </Card>
         )}
       </div>
-      <div className="space-y-4">
+      <div className="col-span-12 space-y-4 md:space-y-6 xl:col-span-4">
         <Card title="Upload">
-          <label className="block text-sm">
-            <span className="sr-only">Choose files</span>
-            <input ref={fileRef} type="file" multiple disabled={busy} aria-label="Choose files to upload" onChange={(e) => upload(e.target.files)} className="block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-indigo-600 file:px-3 file:py-1.5 file:text-white" />
-          </label>
-          <p className="mt-2 text-xs text-slate-500">TXT, Markdown, PDF (text), DOCX, PPTX, CSV, XLSX, JSON, HTML, EML. Other files are preserved and marked unsupported. Images and scanned PDFs need OCR, which is not configured.</p>
-          {!aiEnabled && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">AI processing is off: documents are extracted and searchable, but no draft requirements are proposed.</p>}
-          {notice && <p role="status" className="mt-2 text-sm">{notice}</p>}
-          <ErrorBanner error={error} />
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target; the file input inside is the accessible control */}
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              void upload(e.dataTransfer.files);
+            }}
+            className={`rounded-xl border border-dashed p-6 text-center transition-colors ${dragging ? "border-brand-500 bg-brand-50 dark:bg-brand-500/[0.12]" : "border-gray-300 bg-gray-50 dark:border-gray-700 dark:bg-gray-900"}`}
+          >
+            <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-full bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-400">
+              <UploadIcon className="size-7" />
+            </div>
+            <p className="mb-1 font-semibold text-gray-800 dark:text-white/90">{busy ? "Uploading…" : "Drop files here"}</p>
+            <p className="mb-4 text-theme-sm text-gray-500 dark:text-gray-400">or choose several at once</p>
+            <label className="inline-flex cursor-pointer">
+              <input ref={fileRef} type="file" multiple disabled={busy} aria-label="Choose files to upload" onChange={(e) => upload(e.target.files)} className="peer sr-only" />
+              <span className="inline-flex h-10 items-center rounded-lg bg-brand-500 px-4 text-theme-sm font-medium text-white shadow-theme-xs peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-500 hover:bg-brand-600">
+                Browse files
+              </span>
+            </label>
+          </div>
+          <p className="mt-3 text-theme-xs text-gray-500 dark:text-gray-400">
+            TXT, Markdown, PDF (text), DOCX, PPTX, CSV, XLSX, JSON, HTML, EML. Other files are preserved and marked unsupported. Images and scanned PDFs need OCR, which is not configured.
+          </p>
+          {!aiEnabled && (
+            <div className="mt-3">
+              <Notice tone="warning">AI processing is off: documents are extracted and searchable, but no draft requirements are proposed.</Notice>
+            </div>
+          )}
+          {notice && (
+            <p role="status" className="mt-3 rounded-lg bg-green-50 px-3 py-2 text-theme-sm text-green-700 dark:bg-green-500/15 dark:text-green-400">
+              {notice}
+            </p>
+          )}
+          <div className="mt-3">
+            <ErrorBanner error={error} />
+          </div>
         </Card>
         <Card title="Paste text">
-          <form onSubmit={submitPaste} className="space-y-2">
+          <form onSubmit={submitPaste} className="space-y-4">
             <Field label="Title">{(id) => <Input id={id} value={paste.title} onChange={(e) => setPaste({ ...paste, title: e.target.value })} required />}</Field>
             <Field label="Text">{(id) => <Textarea id={id} rows={5} value={paste.text} onChange={(e) => setPaste({ ...paste, text: e.target.value })} required />}</Field>
             <Button type="submit">Add as source</Button>
@@ -216,6 +279,14 @@ const STATUS_FILTERS: Record<string, string[]> = {
   change_proposal: ["open", "accepted", "rejected", "stale"],
 };
 
+const TYPE_TITLE: Record<string, string> = {
+  requirement: "Requirements",
+  decision: "Decisions",
+  conflict: "Conflicts",
+  open_question: "Open questions",
+  change_proposal: "Change proposals",
+};
+
 function EntityList({ pid, type }: { pid: string; type: string }) {
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
@@ -224,38 +295,83 @@ function EntityList({ pid, type }: { pid: string; type: string }) {
   const shown = (list.data ?? []).filter((e) => !q || `${e.human_id} ${e.title}`.toLowerCase().includes(q.toLowerCase()));
   return (
     <Card
-      title={type.replace("_", " ").replace(/^./, (c) => c.toUpperCase()) + "s"}
-      actions={type !== "change_proposal" && <Button onClick={() => setCreating(!creating)}>{creating ? "Close" : "New draft"}</Button>}
+      title={TYPE_TITLE[type] ?? type}
+      desc={type === "change_proposal" ? "Proposed by developers or Claude Code. Nothing is applied automatically." : "Only items with a valid human approval are treated as approved."}
+      actions={
+        type !== "change_proposal" && (
+          <Button variant={creating ? "secondary" : "primary"} onClick={() => setCreating(!creating)}>
+            {creating ? "Close" : "New draft"}
+          </Button>
+        )
+      }
     >
-      {creating && <NewEntity pid={pid} type={type} onCreated={() => { setCreating(false); void list.reload(); }} />}
-      <div className="mb-3 flex flex-wrap gap-2">
-        <Field label="Status">{(id) => (
-          <Select id={id} value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">All</option>
-            {STATUS_FILTERS[type]?.map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
-          </Select>
-        )}</Field>
+      {creating && (
+        <NewEntity
+          pid={pid}
+          type={type}
+          onCreated={() => {
+            setCreating(false);
+            void list.reload();
+          }}
+        />
+      )}
+      <div className="mb-5 grid gap-4 sm:grid-cols-[14rem_1fr]">
+        <Field label="Status">
+          {(id) => (
+            <Select id={id} value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="">All</option>
+              {STATUS_FILTERS[type]?.map((s) => (
+                <option key={s} value={s}>
+                  {s.replace("_", " ")}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
         <Field label="Filter">{(id) => <Input id={id} value={q} onChange={(e) => setQ(e.target.value)} placeholder="ID or title" />}</Field>
       </div>
       <ErrorBanner error={list.error} />
       {shown.length ? (
-        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-          {shown.map((e) => (
-            <li key={e.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
-              <A href={`/projects/${pid}/entities/${e.human_id}`} className="font-mono">{e.human_id}</A>
-              <span className="flex-1">{e.title}</span>
-              {e.fields.blocking === true && <Badge tone="failed">blocking</Badge>}
-              {e.fields.origin === "ai_proposed" && <Badge tone="pending">AI-proposed</Badge>}
-              {e.status === "approved" && !e.approval_valid && <Badge tone="failed">approval not valid</Badge>}
-              {e.file_state !== "ok" && <Badge tone="failed">{e.file_state}</Badge>}
-              {e.stale && <Badge tone="needs_ocr">stale</Badge>}
-              <Badge>{e.status}</Badge>
-              <span className="text-xs text-slate-500">rev {e.revision}</span>
-            </li>
-          ))}
-        </ul>
+        <div className={table.wrap}>
+          <table className={table.table}>
+            <thead className={table.thead}>
+              <tr>
+                <th className={table.th}>ID</th>
+                <th className={table.th}>Title</th>
+                <th className={table.th}>Flags</th>
+                <th className={table.th}>Status</th>
+                <th className={table.th}>Rev.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((e) => (
+                <tr key={e.id} className={table.tr}>
+                  <td className={`${table.td} whitespace-nowrap`}>
+                    <A href={`/projects/${pid}/entities/${e.human_id}`} className="font-mono">
+                      {e.human_id}
+                    </A>
+                  </td>
+                  <td className={`${table.td} text-gray-800 dark:text-white/90`}>{e.title}</td>
+                  <td className={table.td}>
+                    <div className="flex flex-wrap gap-1">
+                      {e.fields.blocking === true && <Badge tone="error">blocking</Badge>}
+                      {e.fields.origin === "ai_proposed" && <Badge tone="primary">AI-proposed</Badge>}
+                      {e.status === "approved" && !e.approval_valid && <Badge tone="error">approval not valid</Badge>}
+                      {e.file_state !== "ok" && <Badge tone="error">{e.file_state}</Badge>}
+                      {e.stale && <Badge tone="gray">stale</Badge>}
+                    </div>
+                  </td>
+                  <td className={table.td}>
+                    <Badge>{e.status}</Badge>
+                  </td>
+                  <td className={`${table.td} text-theme-xs text-gray-500`}>{e.revision}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
-        !list.loading && <Empty title="Nothing here yet" />
+        !list.loading && <Empty title="Nothing here yet" icon={<ChecklistIcon />} />
       )}
     </Card>
   );
@@ -282,7 +398,7 @@ function NewEntity({ pid, type, onCreated }: { pid: string; type: string; onCrea
     }
   };
   return (
-    <form onSubmit={submit} className="mb-4 space-y-2 rounded-md border border-slate-200 p-3 dark:border-slate-700">
+    <form onSubmit={submit} className="mb-6 space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:p-5 dark:border-gray-800 dark:bg-white/[0.02]">
       <Field label="Title">{(id) => <Input id={id} value={title} onChange={(e) => setTitle(e.target.value)} required minLength={3} />}</Field>
       <Field label={textKey === "question" ? "Question" : "Description"}>{(id) => <Textarea id={id} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field>
       <Field label="Feature scopes" hint="Comma-separated, e.g. email-verification">{(id) => <Input id={id} value={scope} onChange={(e) => setScope(e.target.value)} />}</Field>
@@ -303,29 +419,36 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
     try {
       await api("PATCH", `/projects/${project.id}`, { name, description, ai_enabled: ai });
       setSaved(true);
+      setError(null);
       onSaved();
     } catch (err) {
       setError(err as ApiError);
     }
   };
   return (
-    <Card title="Project settings">
-      <form onSubmit={save} className="max-w-xl space-y-3">
+    <Card title="Project settings" desc="Name, description and AI-processing consent for this project.">
+      <form onSubmit={save} className="max-w-2xl space-y-5">
         <Field label="Name">{(id) => <Input id={id} value={name} onChange={(e) => setName(e.target.value)} required />}</Field>
         <Field label="Description">{(id) => <Textarea id={id} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field>
-        <fieldset className="rounded-md border border-amber-300 p-3 dark:border-amber-700">
-          <legend className="px-1 text-sm font-medium">AI processing</legend>
-          <label className="flex items-start gap-2 text-sm">
-            <input type="checkbox" checked={ai} onChange={(e) => setAi(e.target.checked)} className="mt-1" />
+        <fieldset className="rounded-xl border border-amber-500 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/15">
+          <legend className="px-1 text-theme-sm font-semibold text-gray-800 dark:text-white/90">AI processing</legend>
+          <label className="flex cursor-pointer items-start gap-3 text-theme-sm text-gray-700 dark:text-gray-300">
+            <input type="checkbox" checked={ai} onChange={(e) => setAi(e.target.checked)} className="mt-0.5 size-5 shrink-0 cursor-pointer rounded-md accent-brand-500" />
             <span>
-              Allow Jonathon to send this project&apos;s client text to the Antigravity CLI for answers and draft extraction. The CLI forwards it to its configured model
-              provider and keeps transcripts locally. Turning this off stops new AI processing; it cannot recall text already sent.
+              Allow Jonathon to send this project&apos;s client text to the Antigravity CLI for answers and draft extraction. The CLI forwards it to its configured model provider and
+              keeps transcripts locally. Turning this off stops new AI processing; it cannot recall text already sent.
             </span>
           </label>
         </fieldset>
         <ErrorBanner error={error} />
-        <Button type="submit">Save</Button>
-        {saved && <span role="status" className="ml-2 text-sm text-emerald-700">Saved.</span>}
+        <div className="flex items-center gap-3">
+          <Button type="submit">Save</Button>
+          {saved && (
+            <span role="status" className="text-theme-sm font-medium text-green-600 dark:text-green-500">
+              Saved.
+            </span>
+          )}
+        </div>
       </form>
     </Card>
   );

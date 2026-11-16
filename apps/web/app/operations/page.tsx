@@ -3,7 +3,7 @@
 import type { Job, Project } from "@jonathon/contracts";
 import { useState } from "react";
 import { Shell } from "@/components/shell";
-import { A, Badge, Button, Card, ErrorBanner, Loading, Time } from "@/components/ui";
+import { A, Badge, Button, Card, ErrorBanner, Loading, PageHeader, Time, table } from "@/components/ui";
 import { type ApiError, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
@@ -38,44 +38,46 @@ function OpsBody() {
   const names = new Map((projects.data ?? []).map((p) => [p.id, p.name]));
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Operations</h1>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="Maintenance">
-          <div className="space-y-2">
+    <div className="space-y-4 md:space-y-6">
+      <PageHeader title="Operations" crumbs={[{ label: "Operations" }]} />
+      <div className="grid grid-cols-12 gap-4 md:gap-6">
+        <Card title="Maintenance" className="col-span-12 xl:col-span-5">
+          <div className="space-y-3">
             <Button variant="secondary" disabled={busy} onClick={() => run("/ops/reconcile")}>Reconcile files (import external edits)</Button>
-            <p className="text-xs text-slate-500">Finds Markdown files edited outside Jonathon. Edited drafts become new revisions; edited approved items go back to review. Nothing is deleted.</p>
+            <p className="text-xs text-gray-500">Finds Markdown files edited outside Jonathon. Edited drafts become new revisions; edited approved items go back to review. Nothing is deleted.</p>
             {(projects.data ?? []).map((p) => (
               <div key={p.id} className="flex items-center justify-between text-sm">
                 <span className="truncate">{p.name}</span>
                 <Button variant="ghost" disabled={busy} onClick={() => run(`/projects/${p.id}/reindex`)}>Rebuild index</Button>
               </div>
             ))}
-            <Button variant="secondary" disabled={busy} onClick={() => run("/ops/import-files")}>Import projects found on disk</Button>
-            <Button variant="secondary" disabled={busy} onClick={() => run("/ops/backup")}>Create backup now</Button>
+            <div className="flex flex-wrap gap-3 pt-2">
+              <Button variant="secondary" disabled={busy} onClick={() => run("/ops/import-files")}>Import projects found on disk</Button>
+              <Button variant="secondary" disabled={busy} onClick={() => run("/ops/backup")}>Create backup now</Button>
+            </div>
           </div>
           <ErrorBanner error={error} />
           {result && (
-            <ul role="status" className="mt-3 list-disc space-y-1 rounded bg-slate-100 p-2 pl-6 text-sm dark:bg-slate-800">
+            <ul role="status" className="mt-4 list-disc space-y-1 rounded-xl border border-green-500 bg-green-50 p-4 pl-8 text-theme-sm text-gray-700 dark:border-green-500/30 dark:bg-green-500/15 dark:text-gray-300">
               {result.map((line, i) => <li key={i}>{line}</li>)}
             </ul>
           )}
         </Card>
-        <Card title="Health" className="lg:col-span-2">
+        <Card title="Health" className="col-span-12 xl:col-span-7">
           {health.data ? (
             <dl className="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
-              <dt className="text-slate-500">Overall</dt><dd><Badge tone={health.data.status === "ok" ? "ok" : "failed"}>{health.data.status}</Badge></dd>
-              <dt className="text-slate-500">Mode</dt><dd>{health.data.mode}</dd>
-              <dt className="text-slate-500">Database</dt><dd>{health.data.database.ok ? "ok" : "unavailable"}{health.data.database.fts5 ? ", full-text search available" : ", FTS5 missing"}</dd>
-              <dt className="text-slate-500">Storage</dt><dd>{health.data.storage.ok ? "writable" : "NOT writable"}{health.data.storage.free_bytes != null ? `, ${(health.data.storage.free_bytes / 1e9).toFixed(1)} GB free` : ""}</dd>
-              <dt className="text-slate-500">Worker</dt><dd>{health.data.worker.alive ? "running" : <span className="text-red-600">not running</span>}</dd>
-              <dt className="text-slate-500">Runtime</dt><dd>{health.data.runtime.status}{health.data.runtime.installation?.version ? ` (agy ${health.data.runtime.installation.version})` : ""}</dd>
-              <dt className="text-slate-500">Jobs</dt><dd>{health.data.jobs.active} active, {health.data.jobs.failed} failed</dd>
+              <dt className="text-gray-500">Overall</dt><dd><Badge tone={health.data.status === "ok" ? "ok" : "failed"}>{health.data.status}</Badge></dd>
+              <dt className="text-gray-500">Mode</dt><dd>{health.data.mode}</dd>
+              <dt className="text-gray-500">Database</dt><dd>{health.data.database.ok ? "ok" : "unavailable"}{health.data.database.fts5 ? ", full-text search available" : ", FTS5 missing"}</dd>
+              <dt className="text-gray-500">Storage</dt><dd>{health.data.storage.ok ? "writable" : "NOT writable"}{health.data.storage.free_bytes != null ? `, ${(health.data.storage.free_bytes / 1e9).toFixed(1)} GB free` : ""}</dd>
+              <dt className="text-gray-500">Worker</dt><dd>{health.data.worker.alive ? "running" : <span className="text-red-600">not running</span>}</dd>
+              <dt className="text-gray-500">Runtime</dt><dd>{health.data.runtime.status}{health.data.runtime.installation?.version ? ` (agy ${health.data.runtime.installation.version})` : ""}</dd>
+              <dt className="text-gray-500">Jobs</dt><dd>{health.data.jobs.active} active, {health.data.jobs.failed} failed</dd>
             </dl>
           ) : (
             <Loading />
           )}
-          <p className="mt-2 text-sm">Runtime details and the authentication check are on <A href="/setup">Setup &amp; runtime</A>.</p>
+          <p className="mt-4 text-theme-sm text-gray-600 dark:text-gray-300">Runtime details and the authentication check are on <A href="/setup">Setup &amp; runtime</A>.</p>
         </Card>
       </div>
       <Card title="Backup and restore">
@@ -88,18 +90,19 @@ function OpsBody() {
       </Card>
       <Card title="Jobs">
         <ErrorBanner error={jobs.error} />
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs text-slate-500"><tr><th>Type</th><th>Status</th><th>Project</th><th>Attempts</th><th>Progress / error</th><th>Updated</th><th /></tr></thead>
+        <div className={table.wrap}>
+        <table className={table.table}>
+          <thead className={table.thead}><tr><th className={table.th}>Type</th><th className={table.th}>Status</th><th className={table.th}>Project</th><th className={table.th}>Attempts</th><th className={table.th}>Progress / error</th><th className={table.th}>Updated</th><th className={table.th}><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {(jobs.data ?? []).map((j) => (
-              <tr key={j.id} className="border-t border-slate-100 align-top dark:border-slate-800">
-                <td className="py-1">{j.type}</td>
-                <td><Badge>{j.status}</Badge></td>
-                <td className="text-xs">{names.get(j.project_id) ?? j.project_id}</td>
-                <td>{j.attempts}/{j.max_attempts}</td>
-                <td className="max-w-md truncate text-xs" title={j.error_message ?? ""}>{j.error_code ? `${j.error_code}: ${j.error_message}` : ["queued", "running", "retrying"].includes(j.status) ? (j.progress?.stage ?? "") : ""}</td>
-                <td className="text-xs"><Time iso={j.updated_at} /></td>
-                <td className="whitespace-nowrap">
+              <tr key={j.id} className={`${table.tr} align-top`}>
+                <td className={`${table.td} font-medium text-gray-800 dark:text-white/90`}>{j.type.replace("_", " ")}</td>
+                <td className={table.td}><Badge>{j.status}</Badge></td>
+                <td className={`${table.td} text-theme-xs`}>{names.get(j.project_id) ?? j.project_id}</td>
+                <td className={table.td}>{j.attempts}/{j.max_attempts}</td>
+                <td className={`${table.td} max-w-md truncate text-theme-xs`} title={j.error_message ?? ""}>{j.error_code ? `${j.error_code}: ${j.error_message}` : ["queued", "running", "retrying"].includes(j.status) ? (j.progress?.stage ?? "") : ""}</td>
+                <td className={`${table.td} text-theme-xs whitespace-nowrap`}><Time iso={j.updated_at} /></td>
+                <td className={`${table.td} whitespace-nowrap`}>
                   {["queued", "running", "retrying"].includes(j.status) && <Button variant="ghost" onClick={() => run(`/projects/${j.project_id}/jobs/${j.id}/cancel`)}>Cancel</Button>}
                   {["failed", "cancelled"].includes(j.status) && <Button variant="ghost" onClick={() => run(`/projects/${j.project_id}/jobs/${j.id}/retry`)}>Retry</Button>}
                 </td>
@@ -107,6 +110,7 @@ function OpsBody() {
             ))}
           </tbody>
         </table>
+        </div>
       </Card>
     </div>
   );

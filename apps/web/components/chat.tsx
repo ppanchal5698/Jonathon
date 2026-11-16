@@ -5,6 +5,7 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import { type ApiError, get, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import { Markdown } from "./markdown";
+import { ChatIcon, PlusIcon } from "./icons";
 import { A, Badge, Button, Card, cx, Empty, ErrorBanner, Field, Input, Loading, Textarea, Time } from "./ui";
 
 interface Conv {
@@ -26,36 +27,50 @@ interface Msg {
 }
 
 const AUTHORITY_LABEL: Record<string, [string, string]> = {
-  source_evidence: ["client source", "pending"],
-  approved_requirement: ["approved requirement", "approved"],
-  unapproved_requirement: ["UNAPPROVED requirement", "draft"],
-  approved_decision: ["approved decision", "approved"],
-  unapproved_decision: ["UNAPPROVED decision", "draft"],
-  open_conflict: ["open conflict", "conflicting_sources"],
-  open_question: ["open question", "open"],
-  other_knowledge: ["knowledge", "pending"],
+  source_evidence: ["client source", "gray"],
+  approved_requirement: ["approved requirement", "success"],
+  unapproved_requirement: ["UNAPPROVED requirement", "warning"],
+  approved_decision: ["approved decision", "success"],
+  unapproved_decision: ["UNAPPROVED decision", "warning"],
+  open_conflict: ["open conflict", "error"],
+  open_question: ["open question", "orange"],
+  other_knowledge: ["knowledge", "info"],
 };
 
 export function Chat({ pid }: { pid: string }) {
   const convs = useApi<Conv[]>(`/projects/${pid}/conversations`);
   const [active, setActive] = useState<string | null>(null);
   return (
-    <div className="grid gap-4 lg:grid-cols-4">
-      <Card title="Conversations" actions={<Button variant="ghost" onClick={() => setActive(null)}>New</Button>}>
-        <ul className="space-y-1 text-sm">
+    <div className="grid grid-cols-12 gap-4 md:gap-6">
+      <Card
+        title="Conversations"
+        className="col-span-12 lg:col-span-4 2xl:col-span-3"
+        bodyClassName="p-3 sm:p-3"
+        actions={
+          <Button size="sm" onClick={() => setActive(null)}>
+            <PlusIcon /> New
+          </Button>
+        }
+      >
+        <ul className="custom-scrollbar max-h-[560px] space-y-1 overflow-y-auto">
           {(convs.data ?? []).map((c) => (
             <li key={c.id}>
               <button type="button" onClick={() => setActive(c.id)} aria-current={active === c.id ? "true" : undefined}
-                className={cx("w-full rounded px-2 py-1 text-left", active === c.id ? "bg-indigo-50 dark:bg-slate-800" : "hover:bg-slate-50 dark:hover:bg-slate-800")}>
-                <span className="block truncate">{c.title}</span>
-                <span className="text-xs text-slate-500">{c.owner_kind === "mcp_token" ? "via MCP · " : ""}<Time iso={c.updated_at} /></span>
+                className={cx("flex w-full items-start gap-3 rounded-lg p-3 text-left", active === c.id ? "bg-brand-50 dark:bg-brand-500/[0.12]" : "hover:bg-gray-100 dark:hover:bg-white/5")}>
+                <span className={cx("flex size-10 shrink-0 items-center justify-center rounded-full", c.owner_kind === "mcp_token" ? "bg-sky-50 text-sky-600 dark:bg-sky-500/15 dark:text-sky-400" : "bg-brand-50 text-brand-500 dark:bg-brand-500/15 dark:text-brand-400")}>
+                  <ChatIcon className="size-5" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-theme-sm font-medium text-gray-800 dark:text-white/90">{c.title}</span>
+                  <span className="text-theme-xs text-gray-500 dark:text-gray-400">{c.owner_kind === "mcp_token" ? "via MCP · " : ""}<Time iso={c.updated_at} /></span>
+                </span>
               </button>
             </li>
           ))}
-          {!convs.loading && !convs.data?.length && <li className="text-slate-500">No conversations yet.</li>}
+          {!convs.loading && !convs.data?.length && <li className="p-3 text-theme-sm text-gray-500">No conversations yet.</li>}
         </ul>
       </Card>
-      <div className="lg:col-span-3">
+      <div className="col-span-12 lg:col-span-8 2xl:col-span-9">
         <Conversation key={active ?? "new"} pid={pid} conversationId={active} onCreated={(id) => { setActive(id); void convs.reload(); }} />
       </div>
     </div>
@@ -161,19 +176,19 @@ function Conversation({ pid, conversationId, onCreated }: { pid: string; convers
   };
 
   return (
-    <div className="grid gap-4 xl:grid-cols-3">
-      <Card className="xl:col-span-2">
-        <div className="space-y-4" aria-live="polite">
+    <div className="grid grid-cols-1 gap-4 md:gap-6 2xl:grid-cols-3">
+      <Card className="2xl:col-span-2">
+        <div className="space-y-5" aria-live="polite">
           {!conversationId && messages.length === 0 && (
-            <Empty title="Ask about this project">Answers cite stored evidence, label approved vs draft knowledge, and say when something is unknown.</Empty>
+            <Empty title="Ask about this project" icon={<ChatIcon />}>Answers cite stored evidence, label approved vs draft knowledge, and say when something is unknown.</Empty>
           )}
           {messages.map((m) => (
-            <div key={m.id} className={cx("rounded-lg p-3", m.role === "user" ? "ml-12 bg-indigo-50 dark:bg-indigo-950" : "mr-4 bg-slate-50 dark:bg-slate-800/60")}>
+            <div key={m.id} className={cx("max-w-[92%] rounded-2xl px-4 py-3", m.role === "user" ? "ml-auto rounded-tr-sm bg-brand-500 text-white" : "mr-auto rounded-tl-sm border border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-white/[0.03]")}>
               {m.role === "user" ? (
                 <>
-                  <p className="whitespace-pre-wrap text-sm">{m.content}</p>
+                  <p className="text-theme-sm whitespace-pre-wrap">{m.content}</p>
                   {m.job_id && m.job_id === stuckJobId && !pendingJob && (
-                    <Button variant="ghost" className="mt-1" onClick={() => retry(m.job_id!)}>Retry this question</Button>
+                    <Button variant="secondary" size="sm" className="mt-2" onClick={() => retry(m.job_id!)}>Retry this question</Button>
                   )}
                 </>
               ) : m.answer ? (
@@ -184,23 +199,24 @@ function Conversation({ pid, conversationId, onCreated }: { pid: string; convers
             </div>
           ))}
           {pendingJob && (
-            <div role="status" className="flex items-center gap-3 rounded-md bg-slate-50 p-3 text-sm dark:bg-slate-800">
+            <div role="status" className="flex items-center gap-3 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-theme-sm dark:border-gray-800 dark:bg-white/[0.03]">
+              <span className="size-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" aria-hidden="true" />
               <Badge>{pendingJob.status}</Badge>
               <span>{pendingJob.progress ? `${pendingJob.progress.stage}${pendingJob.progress.detail ? ` (${pendingJob.progress.detail})` : ""}` : "waiting for the worker"}</span>
-              <Button variant="secondary" className="ml-auto" onClick={cancel}>Cancel</Button>
+              <Button variant="secondary" size="sm" className="ml-auto" onClick={cancel}>Cancel</Button>
             </div>
           )}
           <div ref={endRef} />
         </div>
         <ErrorBanner error={error} />
-        <form onSubmit={send} className="mt-4 space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700">
+        <form onSubmit={send} className="mt-6 space-y-4 border-t border-gray-100 pt-5 dark:border-gray-800">
           <Field label={conversationId ? "Follow-up question" : "Question"}>
             {(id) => (
               <Textarea id={id} rows={3} value={text} onChange={(e) => setText(e.target.value)} disabled={!!pendingJob}
                 onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void send(e as unknown as FormEvent); }} />
             )}
           </Field>
-          <div className="flex items-end gap-2">
+          <div className="flex flex-wrap items-end gap-3">
             <Field label="Feature scope (optional)" hint="Readiness is only assessed for a named feature.">
               {(id) => <Input id={id} value={scope} onChange={(e) => setScope(e.target.value)} placeholder="email-verification" />}
             </Field>
@@ -218,23 +234,23 @@ function AnswerView({ answer, stale, onCite, pid }: { answer: Answer; stale: boo
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <Badge>{answer.status}</Badge>
-        {answer.runtime.provider === "demo-extractive" && <Badge tone="needs_ocr">demo, no AI</Badge>}
-        {answer.runtime.provider === "none" && <Badge tone="cancelled">no model used</Badge>}
-        {stale && <Badge tone="failed">stale: evidence changed since</Badge>}
-        <span className="text-xs text-slate-500">knowledge rev {answer.knowledge_revision}</span>
+        {answer.runtime.provider === "demo-extractive" && <Badge tone="primary">demo, no AI</Badge>}
+        {answer.runtime.provider === "none" && <Badge tone="gray">no model used</Badge>}
+        {stale && <Badge tone="error">stale: evidence changed since</Badge>}
+        <span className="text-theme-xs text-gray-500 dark:text-gray-400">knowledge rev {answer.knowledge_revision}</span>
       </div>
       <Markdown text={answer.answer_markdown} onCite={(t) => onCite(t)} />
       {answer.citations.length > 0 && (
         <div>
-          <p className="text-xs font-medium text-slate-500">Sources</p>
-          <ul className="mt-1 flex flex-wrap gap-1.5">
+          <p className="text-theme-xs font-medium text-gray-500 uppercase dark:text-gray-400">Sources</p>
+          <ul className="mt-2 flex flex-wrap gap-2">
             {answer.citations.map((c) => {
               const [label, tone] = AUTHORITY_LABEL[c.authority] ?? ["source", "pending"];
               return (
                 <li key={c.citation_id}>
-                  <button type="button" onClick={() => onCite(c.citation_id)} className="rounded border border-slate-200 px-2 py-0.5 text-xs hover:bg-white dark:border-slate-600 dark:hover:bg-slate-700">
+                  <button type="button" onClick={() => onCite(c.citation_id)} className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-theme-xs text-gray-700 hover:border-brand-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-brand-800">
                     {c.citation_id} · {c.entity_id ?? c.document_title} <Badge tone={tone}>{label}</Badge>
-                    {c.support_check === "quote_not_found" && <Badge tone="failed">quote not found</Badge>}
+                    {c.support_check === "quote_not_found" && <Badge tone="error">quote not found</Badge>}
                   </button>
                 </li>
               );
@@ -243,8 +259,8 @@ function AnswerView({ answer, stale, onCite, pid }: { answer: Answer; stale: boo
         </div>
       )}
       {answer.conflicts.length > 0 && (
-        <div className="rounded-md border border-orange-300 p-2 text-sm dark:border-orange-800">
-          <p className="font-medium">Conflicts</p>
+        <div className="rounded-xl border border-orange-300 bg-orange-50 p-3 text-theme-sm text-gray-700 dark:border-orange-500/30 dark:bg-orange-500/10 dark:text-gray-300">
+          <p className="font-semibold text-gray-800 dark:text-white/90">Conflicts</p>
           <ul className="list-disc pl-5">
             {answer.conflicts.map((c, i) => (
               <li key={i}>{c.conflict_id ? <A href={`/projects/${pid}/entities/${c.conflict_id}`}>{c.conflict_id}</A> : null} {c.summary}</li>
@@ -253,29 +269,29 @@ function AnswerView({ answer, stale, onCite, pid }: { answer: Answer; stale: boo
         </div>
       )}
       {answer.unresolved_questions.length > 0 && (
-        <div className="text-sm">
-          <p className="font-medium">Not established</p>
+        <div className="text-theme-sm text-gray-700 dark:text-gray-300">
+          <p className="font-semibold text-gray-800 dark:text-white/90">Not established</p>
           <ul className="list-disc pl-5">{answer.unresolved_questions.map((q, i) => <li key={i}>{q}</li>)}</ul>
         </div>
       )}
       {answer.inferences.length > 0 && (
-        <div className="text-sm">
-          <p className="font-medium">Inferences (not stated in evidence)</p>
+        <div className="text-theme-sm text-gray-700 dark:text-gray-300">
+          <p className="font-semibold text-gray-800 dark:text-white/90">Inferences (not stated in evidence)</p>
           <ul className="list-disc pl-5 italic">{answer.inferences.map((q, i) => <li key={i}>{q}</li>)}</ul>
         </div>
       )}
-      <div className="text-xs">
-        <span className="font-medium">Implementation ready{answer.readiness_scope ? ` (${answer.readiness_scope})` : ""}: </span>
-        {answer.implementation_ready ? "yes" : "no"}
-        {answer.readiness_reasons.length > 0 && <ul className="mt-1 list-disc pl-5 text-slate-600 dark:text-slate-300">{answer.readiness_reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>}
+      <div className="rounded-xl bg-white p-3 text-theme-xs text-gray-700 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-800">
+        <span className="font-semibold text-gray-800 dark:text-white/90">Implementation ready{answer.readiness_scope ? ` (${answer.readiness_scope})` : ""}: </span>
+        <Badge tone={answer.implementation_ready ? "success" : "error"}>{answer.implementation_ready ? "yes" : "no"}</Badge>
+        {answer.readiness_reasons.length > 0 && <ul className="mt-1 list-disc pl-5 text-gray-600 dark:text-gray-300">{answer.readiness_reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>}
       </div>
       {answer.warnings.length > 0 && (
-        <details className="text-xs text-amber-800 dark:text-amber-300">
+        <details className="text-theme-xs text-amber-600 dark:text-orange-400">
           <summary>{answer.warnings.length} warning(s)</summary>
           <ul className="list-disc pl-5">{answer.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
         </details>
       )}
-      <p className="text-xs text-slate-500">
+      <p className="text-theme-xs text-gray-500 dark:text-gray-400">
         {answer.runtime.provider}{answer.runtime.runtime_version ? ` ${answer.runtime.runtime_version}` : ""} · {(answer.runtime.duration_ms / 1000).toFixed(1)} s
         {answer.runtime.context_rebuilt ? " · runtime context rebuilt" : ""}
       </p>
@@ -286,22 +302,22 @@ function AnswerView({ answer, stale, onCite, pid }: { answer: Answer; stale: boo
 function EvidenceDrawer({ pid, drawer, onClose }: { pid: string; drawer: { answer: Answer; citationId: string } | null; onClose: () => void }) {
   const c: Citation | undefined = drawer?.answer.citations.find((x) => x.citation_id === drawer.citationId);
   return (
-    <aside aria-label="Evidence" className="xl:sticky xl:top-4 xl:self-start">
+    <aside aria-label="Evidence" className="2xl:sticky 2xl:top-24 2xl:self-start">
       <Card title="Evidence" actions={drawer && <Button variant="ghost" onClick={onClose}>Close</Button>}>
         {!c ? (
-          <p className="text-sm text-slate-500">Select a citation to see the stored passage, its location and its authority.</p>
+          <p className="text-theme-sm text-gray-500 dark:text-gray-400">Select a citation to see the stored passage, its location and its authority.</p>
         ) : (
-          <div className="space-y-2 text-sm">
-            <p className="font-medium">{c.citation_id}: {c.entity_id ?? c.document_title}</p>
+          <div className="space-y-3 text-theme-sm">
+            <p className="font-semibold text-gray-800 dark:text-white/90">{c.citation_id}: {c.entity_id ?? c.document_title}</p>
             <p><Badge tone={(AUTHORITY_LABEL[c.authority] ?? ["", "pending"])[1]}>{(AUTHORITY_LABEL[c.authority] ?? [c.authority])[0]}</Badge></p>
-            <blockquote className="whitespace-pre-wrap border-l-4 border-indigo-300 pl-3 text-slate-700 dark:text-slate-200">{c.excerpt}</blockquote>
-            <dl className="grid grid-cols-[6rem_1fr] gap-1 text-xs">
-              <dt className="text-slate-500">Location</dt><dd>{Object.entries(c.locator).map(([k, v]) => `${k} ${v}`).join(", ") || "–"}</dd>
-              <dt className="text-slate-500">Quote check</dt><dd>{c.support_check === "quote_verified" ? "found verbatim in stored evidence" : "NOT found; showing stored passage"}</dd>
-              <dt className="text-slate-500">Revision</dt><dd className="break-all">{c.source_revision ?? "–"}</dd>
-              <dt className="text-slate-500">Hash</dt><dd className="break-all font-mono">{c.content_hash.slice(0, 16)}…</dd>
+            <blockquote className="rounded-r-lg border-l-4 border-brand-500 bg-brand-25 py-2 pr-2 pl-3 whitespace-pre-wrap text-gray-700 dark:bg-brand-500/[0.08] dark:text-gray-200">{c.excerpt}</blockquote>
+            <dl className="grid grid-cols-[6rem_1fr] gap-x-2 gap-y-1.5 text-theme-xs text-gray-700 dark:text-gray-300">
+              <dt className="text-gray-500">Location</dt><dd>{Object.entries(c.locator).map(([k, v]) => `${k} ${v}`).join(", ") || "–"}</dd>
+              <dt className="text-gray-500">Quote check</dt><dd>{c.support_check === "quote_verified" ? "found verbatim in stored evidence" : "NOT found; showing stored passage"}</dd>
+              <dt className="text-gray-500">Revision</dt><dd className="break-all">{c.source_revision ?? "–"}</dd>
+              <dt className="text-gray-500">Hash</dt><dd className="break-all font-mono">{c.content_hash.slice(0, 16)}…</dd>
             </dl>
-            <p className="text-xs text-slate-500">A verified quote proves where the text came from, not that it supports the claim. Read the passage.</p>
+            <p className="text-theme-xs text-gray-500 dark:text-gray-400">A verified quote proves where the text came from, not that it supports the claim. Read the passage.</p>
             {c.source_id ? <A href={`/projects/${pid}/sources/${c.source_id}`}>Open source document</A> : c.entity_id ? <A href={`/projects/${pid}/entities/${c.entity_id}`}>Open {c.entity_id}</A> : null}
           </div>
         )}

@@ -94,6 +94,13 @@ export async function seedDemoProject(app: JonathonApp, user: Extract<Principal,
   const pid = project.id;
   for (const f of await demoSourceFiles()) app.sources.ingest(user, pid, { filename: f.filename, bytes: f.bytes });
   await drainJobs(app, ["ingest"]);
+  // A separately running worker may have claimed some ingest jobs: wait until every one has finished before
+  // switching AI on, or those jobs would queue AI interpretation.
+  for (let i = 0; i < 600; i++) {
+    const busy = app.ctx.queue.list({ projectId: pid }).some((j) => j.type === "ingest" && ["queued", "running", "retrying"].includes(j.status));
+    if (!busy) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
 
   const k = app.knowledge;
   const r1 = k.createDraft(user, pid, "requirement", {
