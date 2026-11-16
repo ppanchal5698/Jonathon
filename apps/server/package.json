@@ -1,0 +1,27 @@
+{
+  "name": "@jonathon/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/main.ts",
+    "dev:worker": "tsx watch --clear-screen=false src/worker.ts",
+    "start": "tsx src/main.ts",
+    "start:worker": "tsx src/worker.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.5",
+    "@fastify/multipart": "10.1.8",
+    "@jonathon/contracts": "workspace:*",
+    "@jonathon/core": "workspace:*",
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "fastify": "5.12.8",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@jonathon/test-fixtures": "workspace:*",
+    "@modelcontextprotocol/client": "2.4.0"
+  }
+}

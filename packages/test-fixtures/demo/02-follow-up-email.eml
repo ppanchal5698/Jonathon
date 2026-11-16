@@ -1,0 +1,18 @@
+From: Dana Whitfield <dana@larkspur.example>
+To: Parth <parth@studio.example>
+Date: Tue, 3 Nov 2026 10:14:00 +0530
+Subject: Re: Portal requirements - follow-up
+Content-Type: text/plain; charset=utf-8
+
+Hi Parth,
+
+FICTIONAL DEMONSTRATION EMAIL.
+
+Thanks for the walkthrough. A few follow-ups:
+
+1. Customers should be able to request a new verification email if the first one gets lost.
+2. We still need to decide how long the verification link stays valid. Our operations team has not agreed on this yet, so please do not assume a value.
+3. For service requests, photos must be JPEG or PNG.
+
+Best,
+Dana

@@ -1,0 +1,35 @@
+import { createApp, loadConfig, loadDotEnv } from "@jonathon/core";
+
+/**
+ * Background worker: ingestion, answering, AI interpretation, reindex. Separate process so a slow runtime or a
+ * parser never blocks the API. Shares the SQLite file with the API; leases make crashes recoverable.
+ */
+async function main() {
+  loadDotEnv();
+  const config = loadConfig();
+  const app = createApp(config);
+  const log = app.ctx.log.child({ component: "worker" });
+  // Local-only diagnostics at startup (version + flags). The provider auth check is NOT run automatically.
+  const diag = await app.ops.runtimeDiagnostics(false);
+  log.info({ runtime: diag.status, provider: diag.provider }, "runtime inspected");
+  const worker = app.startWorker();
+  log.info({ worker_id: worker.workerId, concurrency: config.workerConcurrency }, "worker started");
+
+  let stopping = false;
+  const shutdown = async (signal: string) => {
+    if (stopping) return;
+    stopping = true;
+    log.info({ signal, active: worker.activeJobs }, "stopping worker; releasing running jobs");
+    await app.ctx.runtime.cancel();
+    await worker.stop();
+    app.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+main().catch((e) => {
+  console.error(`Jonathon worker failed to start: ${(e as Error).message}`);
+  process.exit(1);
+});

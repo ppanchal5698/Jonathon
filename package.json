@@ -1,0 +1,36 @@
+{
+  "name": "jonathon",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.16.1",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start": "node scripts/dev.mjs --prod",
+    "build": "pnpm typecheck && pnpm --filter @jonathon/web build",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "doctor": "tsx scripts/doctor.ts",
+    "seed:demo": "tsx scripts/seed-demo.ts",
+    "db:migrate": "tsx scripts/migrate.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6",
+    "@jonathon/contracts": "workspace:*",
+    "@jonathon/core": "workspace:*",
+    "@jonathon/test-fixtures": "workspace:*",
+    "@modelcontextprotocol/client": "2.4.0",
+    "@playwright/test": "1.65.0",
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  }
+}
