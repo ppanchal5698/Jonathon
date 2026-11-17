@@ -188,11 +188,12 @@ function NewProject({ onCreated, onCancel }: { onCreated: () => void; onCancel: 
   const router = useRouter();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [ai, setAi] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      const p = await post<Project>("/projects", { name, description, ai_enabled: false });
+      const p = await post<Project>("/projects", { name, description, ai_enabled: ai });
       onCreated();
       router.push(`/projects/${p.id}`);
     } catch (err) {
@@ -203,7 +204,14 @@ function NewProject({ onCreated, onCancel }: { onCreated: () => void; onCancel: 
     <form onSubmit={submit} className="mb-6 space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:p-5 dark:border-gray-800 dark:bg-white/[0.02]">
       <Field label="Project name">{(id) => <Input id={id} value={name} onChange={(e) => setName(e.target.value)} required autoFocus />}</Field>
       <Field label="Description">{(id) => <Textarea id={id} rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field>
-      <p className="text-theme-xs text-gray-500 dark:text-gray-400">AI processing starts off. Enable it per project in Settings after reading the data-sharing notice.</p>
+      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-500 bg-amber-50 p-4 text-theme-sm text-gray-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-gray-300">
+        <input type="checkbox" checked={ai} onChange={(e) => setAi(e.target.checked)} className="mt-0.5 size-5 shrink-0 cursor-pointer rounded-md accent-brand-500" />
+        <span>
+          <span className="block font-medium text-gray-800 dark:text-white/90">Draft requirements from uploaded documents with AI</span>
+          Each upload is sent to the Antigravity CLI, which forwards the text to its configured model provider and keeps transcripts locally. Jonathon then proposes requirements,
+          open questions, conflicts and changes for you to approve, edit, reject or delete. Untick to keep this project local-only; you can change it later in Settings.
+        </span>
+      </label>
       <ErrorBanner error={error} />
       <div className="flex gap-3">
         <Button type="submit">Create</Button>

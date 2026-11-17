@@ -67,8 +67,36 @@ Verified versions are in [compatibility.md](compatibility.md).
 4. The worker detects the type from **content and extension together**, then runs the parser in a **worker thread** with a
    wall-clock timeout and a heap limit. It writes `extracted/<src>/<rev>.md` and `.locators.json`, then indexes
    the chunks (FTS5) with locators: page, sheet and range, heading path, line, slide, JSON pointer.
-5. If AI processing is enabled for the project, an `extract_knowledge` job proposes **drafts**. Every statement is
-   `proposed`, and its basis is decided by the server through a verbatim match against the cited evidence.
+5. If AI processing is enabled for the project, an `extract_knowledge` job is queued automatically and proposes, for review:
+   * **requirements** (draft, with a description and `proposed` statements whose basis is decided by the server through a
+     verbatim match against the cited evidence);
+   * **open questions**, including the ones raised while drafting a requirement (linked to it, listed in its
+     `open_questions` section by ID);
+   * **conflicts** between evidence blocks, or between the new document and an existing requirement (that requirement's
+     evidence becomes side 2 and it is listed in `related_requirements`);
+   * **change proposals** (`CHANGE-n`) when the document adds to or changes an existing requirement. The prompt lists
+     existing requirements by ID; a proposal stores a replacement description and/or additions as
+     `[<section> · client-stated|AI-inferred] text`, plus the base revision and evidence.
+   To catch disagreements between documents whatever order they arrive in, each batch also carries up to 8 short
+   passages from the project's **other** documents (project-scoped full-text search on the batch's distinctive terms,
+   plus one search per technology or timeline topic it mentions, e.g. a database name → "database"). The model may use
+   these `O` passages only for conflicts; the drafted document is always side 1, and requirements, updates and questions
+   can cite only the drafted document. Drafting runs one document at a time per project.
+   Near-duplicates of existing items are skipped (normalized text, token overlap with plural folding). Nothing produced
+   here is approved or applied.
+
+### Review (accept / edit / reject / delete)
+
+The project's **Review** tab lists every item still waiting for a human: draft or in-review requirements and decisions,
+open questions and conflicts not yet reviewed, and open change proposals. Each action opens a confirmation dialog; the
+server still requires the human session and the exact `<verb> <ID>` phrase, which the dialog sends after the click.
+
+| Action | Requirement / decision | Open question / conflict | Change proposal |
+|---|---|---|---|
+| Accept | `approve`: marks every proposed statement reviewed and approves, in **one** revision, with an approval event | `accept`: sets `reviewed: true`; stays open until answered / resolved | `accept`: applies the description/additions to the requirement (new revision; an approved requirement returns to `in_review` and dependants go stale) and marks the proposal `accepted`. Refused if the requirement's content changed since the proposal's base revision. Free-text proposals are only marked accepted. |
+| Edit | structured editor; edited statements become `human_authored`; editing approved content returns it to review | structured editor; counts as reviewed | not editable |
+| Reject | `rejected` | `withdrawn` / `dismissed` | `rejected` |
+| Delete | `delete <ID>`: removes the live file, projection row and search chunk. `history/<ID>/` keeps every revision plus a `deleted-r<n>.json` tombstone; the ID is never reused and reconciliation never re-imports it. Open proposals for a deleted requirement become `stale`. |||
 
 ### Question → answer
 
@@ -88,8 +116,9 @@ Verified versions are in [compatibility.md](compatibility.md).
 
 ### Approval
 
-Only the signed-in human can approve, reject, supersede, resolve or answer, and each action needs a typed confirmation
-phrase (`approve REQ-001`). The approval event records the entity revision and semantic hash. An entity is approved
+Only the signed-in human can approve, reject, supersede, resolve, answer, accept or delete, and each action needs the
+confirmation phrase (`approve REQ-001`): typed by hand on the entity page's "Other status changes", conflict-resolution and
+answer forms, or sent by the review dialog after the user confirms. The approval event records the entity revision and semantic hash. An entity is approved
 only while its current content still matches that event. See ADR 0002.
 
 ## Package map

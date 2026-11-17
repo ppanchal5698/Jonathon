@@ -152,6 +152,34 @@ export const CheckCircleIcon = (p: P) => (
   </Base>
 );
 
+export const InboxIcon = (p: P) => (
+  <Base {...p}>
+    <path d="M3.5 13.5 6 5.5h12l2.5 8v5h-17v-5Z" />
+    <path d="M3.5 13.5h5l1 2.5h5l1-2.5h5" />
+  </Base>
+);
+export const PencilIcon = (p: P) => (
+  <Base {...p}>
+    <path d="M14.5 5.5 18.5 9.5M4.5 19.5l1-4.5L15.8 4.7a1.4 1.4 0 0 1 2 0l1.5 1.5a1.4 1.4 0 0 1 0 2L9 18.5l-4.5 1Z" />
+  </Base>
+);
+export const TrashIcon = (p: P) => (
+  <Base {...p}>
+    <path d="M4.5 7h15M9.5 7V5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2M6.5 7l1 12a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-12M10 11v6M14 11v6" />
+  </Base>
+);
+export const XCircleIcon = (p: P) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="m9 9 6 6M15 9l-6 6" />
+  </Base>
+);
+export const SparkleIcon = (p: P) => (
+  <Base {...p}>
+    <path d="M12 3.5 13.8 9a1.5 1.5 0 0 0 1 1l5.7 2-5.7 2a1.5 1.5 0 0 0-1 1L12 20.5 10.2 15a1.5 1.5 0 0 0-1-1L3.5 12l5.7-2a1.5 1.5 0 0 0 1-1L12 3.5Z" />
+  </Base>
+);
+
 /** Jonathon mark: brand tile with a "J" glyph. */
 export function LogoMark({ className = "size-8" }: { className?: string }) {
   return (

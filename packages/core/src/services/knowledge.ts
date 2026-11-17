@@ -3,9 +3,10 @@ import { audit } from "../audit";
 import { all, one, run } from "../db";
 import { actorLabel, assertAccess, assertHuman, type Principal } from "../security/principal";
 import type { EntityDoc } from "../storage/entity-format";
-import { semanticHash } from "../storage/entity-format";
+import { parseEntity, semanticHash } from "../storage/entity-format";
 import { AppError, newId, nowIso, sha256 } from "../util";
 import { type Ctx, knowledgeRevision, requireProject } from "./context";
+import { parseAddition } from "./extraction";
 
 type Draft = { title: string; fields?: Record<string, unknown>; sections?: Record<string, unknown>; source_refs?: SourceRef[] };
 
@@ -127,6 +128,8 @@ export class KnowledgeService {
         doc.fields = { ...doc.fields, ...(draft.fields ?? {}), origin: doc.fields.origin ?? "human_authored" };
         doc.sections = { ...doc.sections, ...(draft.sections as EntityDoc["sections"]) };
         if (draft.source_refs) doc.source_refs = draft.source_refs;
+        // A human editing a question or conflict has reviewed it.
+        if ((doc.entity_type === "open_question" || doc.entity_type === "conflict") && principal.kind === "user") doc.fields.reviewed = true;
         if (ENTITY_SPECS[doc.entity_type].approvalStatuses.includes(doc.status)) {
           doc.status = "in_review";
           doc.approval_event_id = null;
@@ -236,6 +239,189 @@ export class KnowledgeService {
     );
     if (body.to === "superseded") this.ctx.store.markDependentsStale(projectId, current.human_id);
     return this.ctx.store.get(projectId, current.human_id);
+  }
+
+  private confirm(principal: Principal, projectId: string, verb: string, humanId: string, confirmation: string): void {
+    assertHuman(principal);
+    requireProject(this.ctx, principal, projectId, "approve");
+    const expected = `${verb} ${humanId}`;
+    if (confirmation.trim().toLowerCase() !== expected.toLowerCase()) throw new AppError("CONFIRMATION_REQUIRED", `type "${expected}" to confirm`);
+  }
+
+  /** The confirmation phrase the review UI shows for each action on an entity. */
+  static reviewVerbs(type: EntityType): { accept: string; reject: string; delete: string } {
+    switch (type) {
+      case "requirement":
+      case "decision":
+        return { accept: "approve", reject: "reject", delete: "delete" };
+      case "open_question":
+      case "conflict":
+        return { accept: "accept", reject: type === "conflict" ? "dismiss" : "withdraw", delete: "delete" };
+      case "change_proposal":
+        return { accept: "accept", reject: "reject", delete: "delete" };
+    }
+  }
+
+  /**
+   * One-step human review of an item the AI proposed from a document:
+   * - requirement / decision: accept every proposed statement and approve, in ONE new revision with an approval event.
+   * - open question / conflict: confirm it is real (fields.reviewed = true); it stays open until answered/resolved.
+   * - change proposal: apply its structured edits to the requirement (which goes back to review) and mark it accepted.
+   */
+  accept(principal: Principal, projectId: string, humanId: string, body: { expected_revision: number; confirmation: string; note?: string }): { entity: KnowledgeEntity; applied_to?: KnowledgeEntity } {
+    const current = this.ctx.store.get(projectId, humanId);
+    this.confirm(principal, projectId, KnowledgeService.reviewVerbs(current.entity_type).accept, current.human_id, body.confirmation);
+    if (current.file_state !== "ok") throw new AppError("EXTERNAL_EDIT_PENDING", "reconcile external edits first");
+    const user = principal as Extract<Principal, { kind: "user" }>;
+
+    if (current.entity_type === "requirement" || current.entity_type === "decision") {
+      if (!["draft", "in_review"].includes(current.status)) throw new AppError("INVALID_TRANSITION", `${current.human_id} is ${current.status}`);
+      const approvalId = newId("apv");
+      this.ctx.store.update(
+        projectId,
+        current.human_id,
+        body.expected_revision,
+        (doc) => {
+          for (const [k, v] of Object.entries(doc.sections)) {
+            if (Array.isArray(v) && v.length && typeof v[0] === "object") {
+              doc.sections[k] = (v as Statement[]).map((s) => ({ ...s, review_state: "accepted" as const }));
+            }
+          }
+          doc.status = "approved";
+          doc.approval_event_id = approvalId;
+        },
+        {
+          principal,
+          action: "entity.approved",
+          details: { via: "review", approval_event_id: approvalId },
+          beforeProjection: (doc) =>
+            run(
+              this.ctx.db,
+              `INSERT INTO approval_events (id, project_id, entity_id, entity_type, human_id, revision, semantic_hash, action, actor_kind, actor_id, note, at)
+               VALUES (?,?,?,?,?,?,?,'approve','user',?,?,?)`,
+              approvalId,
+              projectId,
+              doc.id,
+              doc.entity_type,
+              doc.human_id,
+              doc.revision,
+              semanticHash(doc),
+              user.username,
+              body.note ?? null,
+              nowIso(),
+            ),
+        },
+      );
+      return { entity: this.ctx.store.get(projectId, current.human_id) };
+    }
+
+    if (current.entity_type === "open_question" || current.entity_type === "conflict") {
+      if (current.status !== "open") throw new AppError("INVALID_TRANSITION", `${current.human_id} is ${current.status}`);
+      this.ctx.store.update(
+        projectId,
+        current.human_id,
+        body.expected_revision,
+        (doc) => {
+          doc.fields.reviewed = true;
+        },
+        { principal, action: "entity.reviewed" },
+      );
+      return { entity: this.ctx.store.get(projectId, current.human_id) };
+    }
+
+    // change_proposal
+    if (current.status !== "open") throw new AppError("INVALID_TRANSITION", `${current.human_id} is ${current.status}`);
+    const reqId = String(current.fields.requirement_id ?? "");
+    const description = String(current.sections.proposed_description ?? "").trim();
+    const additions = ((current.sections.proposed_additions as string[]) ?? []).map(parseAddition).filter((a) => a !== null);
+    const structured = description !== "" || additions.length > 0;
+    let appliedTo: string | null = null;
+    this.ctx.store.writeTx(() => {
+      if (structured) {
+        const req = this.ctx.store.get(projectId, reqId);
+        if (req.entity_type !== "requirement") throw new AppError("REQUIREMENT_NOT_FOUND", `${reqId} is not a requirement`);
+        if (["rejected", "superseded"].includes(req.status)) throw new AppError("INVALID_TRANSITION", `${req.human_id} is ${req.status}; reject this proposal instead`);
+        if (req.file_state !== "ok") throw new AppError("EXTERNAL_EDIT_PENDING", `reconcile external edits to ${req.human_id} first`);
+        // Approving a requirement adds a revision without changing its content, so compare content, not revision numbers.
+        const base = Number(current.fields.base_revision ?? 0);
+        if (base !== req.revision) {
+          const baseText = this.ctx.store.readHistoryRaw(projectId, req.human_id, base);
+          const baseHash = baseText ? semanticHash(parseEntity(baseText)) : null;
+          if (baseHash !== req.semantic_hash) {
+            throw new AppError("REVISION_CONFLICT", `${req.human_id} changed since this proposal was made (revision ${base} → ${req.revision}). Review it and reject or re-propose.`, {
+              details: { current_revision: req.revision },
+            });
+          }
+        }
+        const wasApproved = req.approval_valid;
+        this.ctx.store.update(
+          projectId,
+          req.human_id,
+          req.revision,
+          (doc) => {
+            if (description) doc.sections.description = description;
+            for (const a of additions) {
+              const list = Array.isArray(doc.sections[a.section]) ? (doc.sections[a.section] as Statement[]) : [];
+              // The human accepted the proposal, so its statements are reviewed; basis still records where they came from.
+              doc.sections[a.section] = [...list, { text: a.text, basis: a.basis, review_state: "accepted" }];
+            }
+            const have = new Set(doc.source_refs.map((r) => `${r.revision_id}:${r.chunk_id ?? ""}`));
+            doc.source_refs = [...doc.source_refs, ...current.source_refs.filter((r) => !have.has(`${r.revision_id}:${r.chunk_id ?? ""}`))];
+            if (ENTITY_SPECS[doc.entity_type].approvalStatuses.includes(doc.status)) {
+              doc.status = "in_review";
+              doc.approval_event_id = null;
+            }
+          },
+          { principal, action: "entity.proposal_applied", details: { proposal: current.human_id, approval_revoked: wasApproved } },
+        );
+        if (wasApproved) this.ctx.store.markDependentsStale(projectId, req.human_id);
+        appliedTo = req.human_id;
+      }
+      this.ctx.store.update(
+        projectId,
+        current.human_id,
+        body.expected_revision,
+        (doc) => {
+          doc.status = "accepted";
+        },
+        { principal, action: "entity.accepted", details: { applied_to: appliedTo } },
+      );
+    });
+    return {
+      entity: this.ctx.store.get(projectId, current.human_id),
+      ...(appliedTo ? { applied_to: this.ctx.store.get(projectId, appliedTo) } : {}),
+    };
+  }
+
+  /** Reject a proposed item: requirement/decision → rejected, question → withdrawn, conflict → dismissed, proposal → rejected. */
+  reject(principal: Principal, projectId: string, humanId: string, body: { expected_revision: number; confirmation: string; note?: string }): KnowledgeEntity {
+    const current = this.ctx.store.get(projectId, humanId);
+    const to = { requirement: "rejected", decision: "rejected", open_question: "withdrawn", conflict: "dismissed", change_proposal: "rejected" }[current.entity_type];
+    return this.transition(principal, projectId, current.human_id, { to, expected_revision: body.expected_revision, confirmation: body.confirmation, note: body.note });
+  }
+
+  /**
+   * Permanently remove an item from the knowledge base (separate, human-confirmed workflow: "delete <ID>").
+   * Its history and a tombstone stay on disk; open proposals that target a deleted requirement become stale.
+   */
+  remove(principal: Principal, projectId: string, humanId: string, body: { expected_revision: number; confirmation: string }): { deleted: string } {
+    const current = this.ctx.store.get(projectId, humanId);
+    this.confirm(principal, projectId, "delete", current.human_id, body.confirmation);
+    const wasApproved = current.approval_valid;
+    this.ctx.store.writeTx(() => {
+      // Flag answers/specs that relied on it while its projection row still exists (the query joins on it).
+      if (wasApproved || current.entity_type === "requirement" || current.entity_type === "decision") this.ctx.store.markDependentsStale(projectId, current.human_id);
+      this.ctx.store.remove(projectId, current.human_id, body.expected_revision, { principal, details: { was_approved: wasApproved } });
+      if (current.entity_type === "requirement") {
+        for (const p of this.ctx.store.list(projectId, { types: ["change_proposal"], statuses: ["open"] })) {
+          if (p.fields.requirement_id !== current.human_id) continue;
+          this.ctx.store.update(projectId, p.human_id, p.revision, (d) => {
+            d.status = "stale";
+          }, { principal, action: "entity.stale", details: { reason: `${current.human_id} was deleted` } });
+        }
+      }
+    });
+    return { deleted: current.human_id };
   }
 
   /** Resolve a conflict by recording an approved human decision. One transaction for both files. */

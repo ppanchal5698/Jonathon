@@ -7,8 +7,10 @@ storage, permissions, conversations and approvals.
 
 * No Obsidian, Notion or other knowledge app is required. Knowledge is stored as plain Markdown that any editor, Obsidian included, can open.
 * Single user, loopback only, with an authenticated UI and token-authenticated MCP.
-* AI processing is **off per project** until you enable it. When it is on, the relevant client text goes to the Antigravity CLI and on to its
-  model provider. Jonathon orchestrates locally; it does not run a model locally.
+* AI processing is a **per-project choice** made when you create the project (the form's consent box is ticked by default; the API default
+  stays off). When it is on, every uploaded document is drafted into proposed requirements, descriptions, open questions, conflicts and
+  change proposals that you approve, edit, reject or delete in the project's **Review** tab. The relevant client text goes to the
+  Antigravity CLI and on to its model provider. Jonathon orchestrates locally; it does not run a model locally.
 
 ## Requirements
 
@@ -33,8 +35,8 @@ pnpm run doctor
 pnpm dev
 ```
 
-Open <http://127.0.0.1:3000>, create the local account, and read the data-sharing notice. Create a project, enable AI processing
-in its Settings if you want answers and draft extraction, then upload documents.
+Open <http://127.0.0.1:3000>, create the local account, and read the data-sharing notice. Create a project (leave "Draft
+requirements from uploaded documents with AI" ticked if you want automatic drafts), upload documents, then work through **Review**.
 
 Optional fictional demo project (after the account exists):
 

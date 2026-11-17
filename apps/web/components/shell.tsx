@@ -20,6 +20,7 @@ import {
   DocumentIcon,
   FolderIcon,
   GridIcon,
+  InboxIcon,
   KeyIcon,
   LogoMark,
   LogoutIcon,
@@ -44,6 +45,7 @@ interface Session {
 
 export const PROJECT_SECTIONS = [
   ["overview", "Overview", GridIcon],
+  ["review", "Review", InboxIcon],
   ["documents", "Documents", DocumentIcon],
   ["requirements", "Requirements", ChecklistIcon],
   ["decisions", "Decisions", ScaleIcon],

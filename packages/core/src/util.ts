@@ -96,6 +96,26 @@ export function normalizeForMatch(s: string): string {
     .toLowerCase();
 }
 
+/**
+ * Normalization for "is this wording in the source?" checks: case, whitespace and sentence punctuation are ignored
+ * (models add a trailing period to table-cell text, drop quotes, or change "(x)" to "x"), while digits, %, $, /, + and
+ * hyphens are kept. Padded with spaces so matching is word-bounded ("under 3" never matches "under 30%").
+ */
+function looseNormalize(s: string): string {
+  return ` ${normalizeForMatch(s)
+    .replace(/[–—]/g, "-")
+    .replace(/[.,;:!?"'`()[\]{}…|*_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()} `;
+}
+
+/** True when `needle` appears in `haystack` word-for-word, ignoring case, whitespace and sentence punctuation. */
+export function containsWording(haystack: string, needle: string): boolean {
+  const n = looseNormalize(needle);
+  if (n.trim().length < 3) return false;
+  return looseNormalize(haystack).includes(n);
+}
+
 /** Simple async mutex keyed by string (in-process coordination only). */
 export class KeyedMutex {
   private tails = new Map<string, Promise<unknown>>();

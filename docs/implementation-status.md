@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 16 Nov 2026, 8:02 PM IST.
+Last updated: 17 Nov 2026, 2:35 PM IST.
 
 Legend: **Live-verified** = exercised against the real `agy` 1.5.9 or a real MCP SDK client on this machine.
 **Fixture-tested** = automated tests through real code paths with recorded or fake inputs (no network).
@@ -40,9 +40,11 @@ Legend: **Live-verified** = exercised against the real `agy` 1.5.9 or a real MCP
 | Explicit `--conversation` resume; silent replacement detected | **live-verified** resume; fixture-tested mismatch | live + services |
 | Answer pipeline: authority labels, citation validation, verbatim quote check, readiness rules | fixture-tested + **live-verified** model output | services tests, live test |
 | Draft extraction (flat schema, server-decided statement basis, conflicts need two sides) | fixture-tested + **live-verified** | live probe / live test |
+| Automatic drafting on upload: requirements, linked open questions, conflicts (incl. against existing requirements), change proposals for existing requirements, near-duplicate skipping | fixture-tested + **live-verified** in the browser | `review.test.ts`; QA run below |
+| Review actions: approve-in-one-step, accept question/conflict, accept-and-apply proposal (content-changed check), reject/dismiss/withdraw, delete with tombstone and no ID reuse | fixture-tested + browser e2e | `review.test.ts`, `e2e/jonathon.spec.ts` |
 | Durable jobs: leases, retries with backoff, cancel, retry, restart recovery, per-conversation serialization | fixture-tested | services "durable operation" |
 | MCP Streamable HTTP, 7 tools, scopes, idempotency, pending-job polling, revocation, access log | fixture-tested with a **real MCP SDK client** | server tests |
-| Next.js UI: setup, dashboard, projects, documents, extraction preview, knowledge review, approvals, conflicts, questions, diff, chat with evidence drawer, MCP, operations | built + browser e2e | `e2e/jonathon.spec.ts` |
+| Next.js UI: setup, dashboard, projects, review queue, documents (per-document AI draft summary), extraction preview, structured editor, approvals, conflicts, questions, proposals, diff, chat with evidence drawer, MCP, operations | built + browser e2e | `e2e/jonathon.spec.ts` |
 | `pnpm run doctor`, `seed:demo`, `db:migrate`, `runtime-probe` | built | run manually |
 | Backup (VACUUM INTO + projects copy) | fixture-tested | services "backups" |
 | OCR for images and scanned PDFs | **not done**: Tesseract not installed; files are marked `needs_ocr` | |
@@ -58,6 +60,7 @@ Legend: **Live-verified** = exercised against the real `agy` 1.5.9 or a real MCP
 | Tool-free answer with schema-valid structured output, citations to supplied evidence, injected "say 1 hour" not followed, readiness not claimed | pass |
 | Follow-up via `--conversation <uuid>` keeps the same conversation | pass |
 | Draft extraction finds the 8-vs-12 conflict without choosing a side | pass with `AGY_EXTRACTION_EFFORT=low` (about 14 s). At the CLI default effort it produced no output within 4 minutes (3 runs) |
+| Upload-driven drafting with the extended schema (`requirement_updates`), through the UI | pass: a sign-up brief gave 4 requirements and 3 questions ("several failed attempts" became a question); a later security addendum gave a conflict against approved REQ-003 (8 vs 12) and a proposal to extend approved REQ-002, with no duplicate requirements. About 30–40 s per document |
 | `--settings` deny rules block `run_command` | pass (probe) |
 | `search_web` NOT blocked by deny rules alone; blocked by the `tools: [finish]` agent | observed (probe), hence the agent restriction |
 | Workspace `AGENTS.md` is loaded as rules | observed (probe), hence empty workspaces |
@@ -132,3 +135,42 @@ and the `claude mcp add` syntax is from the docs, but no Claude Code session was
   Also fixed during review: Markdown headings and lists mixed with text (rendered raw before), missing accessible
   names on sidebar and account controls, cramped MCP credentials table, and the demo seed still racing a separately
   running worker (it now waits for every ingest job before enabling AI).
+* **9:05–9:37 PM**: uploads now become a review queue. With AI processing on (the new-project form asks, ticked by default),
+  each upload is drafted into requirements with descriptions, open questions (requirement-level ones become linked
+  QUESTION items), conflicts (also against existing requirements) and change proposals for existing requirements. New
+  **Review** tab with Approve / Edit / Reject / Delete per item and confirmation dialogs; structured editor replaces the JSON
+  editor; Documents shows what was drafted per document; delete is tombstoned (history kept, ID never reused, never
+  re-imported). The near-duplicate issue above is addressed (token-overlap matching against all existing items, and updates
+  to existing requirements go through proposals). Found and fixed while testing: the fixture CLI rejected the extractor agent,
+  so fixture extraction had silently failed in tests; review dialogs focusing the close icon; Edit still offered while
+  editing. Final: 74 unit/integration, 1 e2e (now covering the review flow), lint, typecheck and build pass; live agy
+  drafting verified through the browser on the QA instance.
+* **9:45–10:14 PM**: accuracy evaluation on a real 8-document client corpus (two versions of a requirements document,
+  a proposal deck, an identity setup guide, a brief, an estimate, a project tracker and a delivery plan; processed on the
+  isolated QA instance, real agy 1.5.9). Scored against a hand-built checklist of the 89 numbered requirements, 10
+  open questions and the cross-document disagreements. First run: 83% of numbered requirements covered, but 68 of 87
+  "requirements" were tasks from plans and estimates, 2 of 350 statements labelled client-stated, 46 change proposals,
+  parallel drafting races producing duplicate questions and proposals, and a false conflict between two different
+  applications. Chat answers: 8 of 8 factually correct, all quotes verified, both real conflicts surfaced, the
+  unanswerable question refused. Fixed: statement basis now ignores case and sentence punctuation (word-bounded);
+  drafting is serialized per project; spreadsheets use the real header row (not a merged title), keep row merges once and
+  column merges per row, keep true row numbers, and round float noise; merged chunks report a bounding cell range
+  (citations previously showed only the first block's range); the prompt separates delivery documents from requirement
+  documents, keeps client requirement IDs (one requirement per numbered item), and only reports conflicts within the
+  same system; smaller batches; the existing-requirements list is ranked by relevance; paraphrased duplicate questions
+  and already-proposed statements are skipped (numbers and client IDs never merge). Second run: 100% of numbered
+  requirements covered (72 as their own requirement, the rest in proposals), 0 requirements from plans, 137 of 197
+  statements client-stated, 23 proposals, no duplicate requirements. Still open: disagreements between two documents
+  that are not requirement documents (for example a tracker vs a spec on database or framework) are no longer detected
+  once plans stop producing requirements; an open question answered by a later document is not linked to that answer;
+  DOCX equations are extracted twice by mammoth in one file; answers take 50–220 s under load.
+* **17 Nov 2026, 2:35 PM IST**: cross-document conflict detection. Each drafting batch now sees up to 8 related passages
+  from the project's other documents (lexical search on distinctive terms plus per-topic searches for technology and
+  timeline words), usable only for conflicts; the drafted document is always side 1 and each side names its document;
+  conflict excerpts show the matching lines. Third run on the same 8-document corpus (plans uploaded before the spec):
+  88 of 89 numbered requirements as their own item, 0 duplicate questions (13 total), 10 conflicts of which 8 are real
+  cross-document disagreements (login provider, technology stack, review turnaround, dependency due dates) and 2 are
+  low-value (document author line; a placeholder "X%" that the spec answers with 15%). A targeted run with the tracker
+  drafted before the spec found the FastAPI/React/PostgreSQL vs .NET/Angular/Azure SQL clash it had missed. Still open:
+  an open question answered by a later document is not linked to that answer; one RUD open question (external log-ins)
+  was not raised; DOCX equations duplicated in one file. Tests: 80 unit/integration, 1 e2e, 4 live, lint, typecheck pass.

@@ -97,6 +97,39 @@ describe("extractors keep locators", () => {
     expect(r.warnings.join(" ")).toMatch(/formulas were not evaluated/);
   });
 
+  it("XLSX with a merged title row, a summary block and blank rows: real header, no repeated merges, true row numbers", async () => {
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Estimation");
+    ws.getCell("A1").value = "Pricing Platform – Effort Estimation";
+    ws.mergeCells("A1:D1");
+    ws.getCell("A2").value = "Total hours";
+    ws.getCell("B2").value = 2095;
+    // row 3 left blank on purpose
+    ["ID", "Phase", "Module", "Hours"].forEach((h, i) => {
+      ws.getRow(4).getCell(i + 1).value = h;
+    });
+    ["M1", "P0", "Infrastructure setup", 76].forEach((v, i) => {
+      ws.getRow(5).getCell(i + 1).value = v;
+    });
+    ["M2", "P1", "Access and users", 120].forEach((v, i) => {
+      ws.getRow(7).getCell(i + 1).value = v;
+    });
+    // M2 spans rows 7–8 (vertical merge): row 8 still belongs to M2.
+    ws.getCell("C8").value = "Roles";
+    ws.getCell("D8").value = 13.719999999999999;
+    ws.mergeCells("A7:A8");
+    const r = await runExtraction(new Uint8Array(await wb.xlsx.writeBuffer()), "xlsx", { timeoutMs: 20_000 });
+    const all = r.chunks.map((c) => c.text).join("\n");
+    expect(all).toContain("Row 1: Pricing Platform – Effort Estimation");
+    expect(all).toContain("Row 5: ID = M1; Phase = P0; Module = Infrastructure setup; Hours = 76");
+    expect(all).toContain("Row 7: ID = M2"); // row 6 is blank: numbering follows the sheet, not the position
+    expect(all).toContain("Row 8: ID = M2; Module = Roles; Hours = 13.72");
+    expect(all.match(/Effort Estimation/g)).toHaveLength(1); // merged title not repeated, not used as a column name
+    const body = r.chunks.find((c) => c.text.includes("Row 5:"))!;
+    expect(body.locator.range).toBe("A1:D8"); // the chunk also holds the title rows; its range covers all of them
+  });
+
   it("CSV, JSON, HTML (scripts removed), EML", async () => {
     const csv = await extractDocument(enc("Rule,Value\nPassword,12\nLockout,=1+1\n"), "csv");
     expect(csv.chunks[0]!.locator.range).toBe("A2:B3");

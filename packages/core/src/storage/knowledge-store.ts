@@ -5,7 +5,7 @@ import { audit } from "../audit";
 import { all, type Db, one, run, tx } from "../db";
 import type { Logger } from "../logger";
 import { deleteChunksForEntity, insertChunk } from "../retrieval/indexer";
-import type { Principal } from "../security/principal";
+import { actorLabel, type Principal } from "../security/principal";
 import { AppError, newId, nowIso, parseJson, sha256 } from "../util";
 import {
   ENTITY_SCHEMA_VERSION,
@@ -183,13 +183,19 @@ export class KnowledgeStore {
     let max = 0;
     for (const r of rows) max = Math.max(max, Number(r.human_id.split("-")[1]));
     // Files not yet in the projection (external additions) must not be overwritten either.
-    try {
-      for (const n of readdirSync(join(this.projectDir(projectId), ENTITY_SPECS[type].dir))) {
-        const m = new RegExp(`^${prefix}-(\\d+)\\.md$`).exec(n);
-        if (m) max = Math.max(max, Number(m[1]));
+    // IDs of deleted entities (which keep their history/<HID>/ folder) are never reused.
+    for (const [dir, re] of [
+      [ENTITY_SPECS[type].dir, new RegExp(`^${prefix}-(\\d+)\\.md$`)],
+      ["history", new RegExp(`^${prefix}-(\\d+)$`)],
+    ] as const) {
+      try {
+        for (const n of readdirSync(join(this.projectDir(projectId), dir))) {
+          const m = re.exec(n);
+          if (m) max = Math.max(max, Number(m[1]));
+        }
+      } catch {
+        /* directory may not exist yet */
       }
-    } catch {
-      /* directory may not exist yet */
     }
     return `${prefix}-${String(max + 1).padStart(3, "0")}`;
   }
@@ -350,6 +356,62 @@ export class KnowledgeStore {
     // commit fails, the intent stays and reconciliation completes or discards it.
     this.pendingIntents.push(intentPath);
     return doc;
+  }
+
+  /**
+   * Delete an entity (human-confirmed workflow in KnowledgeService). The live file and its projection row go away;
+   * history/<HID>/ keeps every revision plus a deleted-r<n>.json tombstone, so the ID is never reused and the
+   * content stays auditable. Approval events are kept as historical records.
+   */
+  remove(projectId: string, humanId: string, expectedRevision: number, opts: { principal: Principal; details?: Record<string, unknown> }): EntityDoc {
+    return this.writeTx(() => {
+      const row = this.getRow(projectId, humanId);
+      if (!row) throw new AppError("ENTITY_NOT_FOUND", `${humanId} not found in this project`);
+      const path = this.entityPath(projectId, row.entity_type, row.human_id);
+      const text = readText(path);
+      if (text == null || sha256(text) !== row.file_hash) {
+        throw new AppError("EXTERNAL_EDIT_PENDING", `${row.human_id} was changed outside Jonathon. Run reconciliation before deleting it.`);
+      }
+      if (row.revision !== expectedRevision) {
+        throw new AppError("REVISION_CONFLICT", `${row.human_id} is at revision ${row.revision}, not ${expectedRevision}`, {
+          details: { current_revision: row.revision },
+        });
+      }
+      const doc = parseEntity(text);
+      // The last revision is already in history (create-only); the tombstone records who deleted it and when.
+      const tombstone = {
+        human_id: row.human_id,
+        entity_id: row.id,
+        entity_type: row.entity_type,
+        revision: row.revision,
+        file_hash: row.file_hash,
+        deleted_by: actorLabel(opts.principal),
+        deleted_at: nowIso(),
+      };
+      writeFileCreateOnly(this.historyPath(projectId, row.human_id, `deleted-r${row.revision}.json`), `${JSON.stringify(tombstone, null, 2)}\n`);
+      run(this.db, "DELETE FROM knowledge_entities WHERE id = ?", row.id);
+      deleteChunksForEntity(this.db, projectId, row.id);
+      run(this.db, "UPDATE projects SET knowledge_revision = knowledge_revision + 1, updated_at = ? WHERE id = ?", nowIso(), projectId);
+      audit(this.db, {
+        principal: opts.principal,
+        projectId,
+        action: "entity.deleted",
+        entityType: row.entity_type,
+        entityId: row.human_id,
+        details: { revision: row.revision, status: row.status, ...opts.details },
+      });
+      rmSync(path, { force: true });
+      return doc;
+    });
+  }
+
+  /** True when the entity was deleted in Jonathon (a tombstone exists in its history folder). */
+  isDeleted(projectId: string, humanId: string): boolean {
+    try {
+      return readdirSync(join(this.projectDir(projectId), "history", humanId)).some((n) => /^deleted-r\d+\.json$/.test(n));
+    } catch {
+      return false;
+    }
   }
 
   approvalFor(doc: EntityDoc, semHash: string): { valid: boolean; event: Record<string, unknown> | null } {
@@ -571,6 +633,11 @@ export class KnowledgeStore {
         if (text == null) continue;
         const fileHash = sha256(text);
         const row = this.getRow(projectId, humanId);
+        if (!row && this.isDeleted(projectId, humanId)) {
+          // Never resurrect a deleted entity: its ID is retired. The file is left untouched for the user to remove.
+          report.invalid_files.push({ path: rel, reason: `${humanId} was deleted in Jonathon; this file was not imported` });
+          continue;
+        }
         if (row && row.file_hash === fileHash) {
           if (row.file_state !== "ok") run(this.db, "UPDATE knowledge_entities SET file_state = 'ok' WHERE id = ?", row.id);
           report.unchanged++;

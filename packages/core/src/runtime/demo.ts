@@ -138,6 +138,6 @@ export class DemoExtractiveRuntime implements ReasoningRuntime {
         if (reqs.length >= 20) break;
       }
     }
-    return { requirements: reqs, open_questions: [], conflicts: [] };
+    return { requirements: reqs, open_questions: [], conflicts: [], requirement_updates: [] };
   }
 }

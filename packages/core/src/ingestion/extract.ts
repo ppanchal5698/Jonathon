@@ -157,27 +157,48 @@ function colName(n: number): string {
   return s;
 }
 
-function rowsToBlocks(sheet: string | null, rows: string[][], firstRowNumber: number, warnings: string[]): Block[] {
+type SheetRow = { n: number; vals: string[] };
+
+/**
+ * Pick the header row: the first of the top rows whose filled cells are mostly text, distinct, and about as many as
+ * the sheet's widest rows. Title rows, notes and summary blocks above it are kept as plain preamble text instead of
+ * being used as column names for every cell.
+ */
+export function findHeaderRow(rows: SheetRow[]): number {
+  const filled = (r: SheetRow) => r.vals.map((v) => v.trim()).filter(Boolean);
+  const top = rows.slice(0, 40);
+  const widest = Math.max(...top.map((r) => filled(r).length));
+  for (let i = 0; i < Math.min(rows.length, 25); i++) {
+    const cells = filled(rows[i]!);
+    if (cells.length < 2 || cells.length < Math.ceil(widest * 0.6)) continue;
+    const texty = cells.filter((c) => !/^[-+]?[\d.,%$\s:/]+$/.test(c)).length;
+    if (texty / cells.length >= 0.8 && new Set(cells).size === cells.length) return i;
+  }
+  return 0;
+}
+
+function rowsToBlocks(sheet: string | null, rows: SheetRow[], warnings: string[]): Block[] {
   const blocks: Block[] = [];
   if (rows.length === 0) return blocks;
-  const header = rows[0]!.map((h, i) => (h || `Column ${colName(i + 1)}`).trim());
-  const width = Math.max(...rows.map((r) => r.length));
-  for (let i = 1; i < rows.length; i += ROWS_PER_CHUNK) {
-    const slice = rows.slice(i, i + ROWS_PER_CHUNK);
-    const startRow = firstRowNumber + i;
-    const endRow = startRow + slice.length - 1;
+  const width = Math.max(...rows.map((r) => r.vals.length));
+  const loc = (a: number, b: number): Locator => ({ range: `A${a}:${colName(width)}${b}`, ...(sheet ? { sheet } : {}) });
+  const heading = sheet ? `Sheet ${sheet}` : null;
+  const h = findHeaderRow(rows);
+  if (h > 0) {
+    const pre = rows.slice(0, h);
+    const text = pre.map((r) => `Row ${r.n}: ${[...new Set(r.vals.map((v) => v.trim()).filter(Boolean))].join("; ")}`).join("\n");
+    blocks.push({ heading, locator: loc(pre[0]!.n, pre[pre.length - 1]!.n), text });
+  }
+  const header = rows[h]!.vals.map((v, i) => (v.trim() || `Column ${colName(i + 1)}`).replace(/\s+/g, " "));
+  const body = rows.slice(h + 1);
+  for (let i = 0; i < body.length; i += ROWS_PER_CHUNK) {
+    const slice = body.slice(i, i + ROWS_PER_CHUNK);
     const text = slice
-      .map((r, k) => `Row ${startRow + k}: ${r.map((v, c) => (v?.trim() ? `${header[c] ?? colName(c + 1)} = ${v.trim()}` : "")).filter(Boolean).join("; ")}`)
+      .map((r) => `Row ${r.n}: ${r.vals.map((v, c) => (v?.trim() ? `${header[c] ?? colName(c + 1)} = ${v.trim()}` : "")).filter(Boolean).join("; ")}`)
       .join("\n");
-    const locator: Locator = { range: `A${startRow}:${colName(width)}${endRow}` };
-    if (sheet) locator.sheet = sheet;
-    blocks.push({ heading: sheet ? `Sheet ${sheet}` : null, locator, text });
+    blocks.push({ heading, locator: loc(slice[0]!.n, slice[slice.length - 1]!.n), text });
   }
-  if (rows.length === 1) {
-    const locator: Locator = { range: `A${firstRowNumber}:${colName(width)}${firstRowNumber}` };
-    if (sheet) locator.sheet = sheet;
-    blocks.push({ heading: sheet ? `Sheet ${sheet}` : null, locator, text: `Header: ${header.join(" | ")}` });
-  }
+  if (body.length === 0) blocks.push({ heading, locator: loc(rows[h]!.n, rows[h]!.n), text: `Header: ${header.join(" | ")}` });
   void warnings;
   return blocks;
 }
@@ -190,7 +211,12 @@ async function extractCsv(bytes: Uint8Array): Promise<ExtractionOutcome> {
   if (res.data.some((r) => r.some((v) => /^[=+@-]/.test(v ?? "") && /^[=+@]/.test(v ?? "")))) {
     warnings.push("formula-like cell values were kept as plain text and not evaluated");
   }
-  return done("papaparse", rowsToBlocks(null, res.data, 1, warnings), warnings);
+  return done("papaparse", rowsToBlocks(null, res.data.map((vals, i) => ({ n: i + 1, vals: vals.map((v) => v ?? "") })), warnings), warnings);
+}
+
+/** Floating-point noise from cached formula results (13.719999999999999) is rounded to 6 decimals (13.72). */
+function num(n: number): string {
+  return Number.isInteger(n) ? String(n) : String(Number(n.toFixed(6)));
 }
 
 async function extractXlsx(bytes: Uint8Array): Promise<ExtractionOutcome> {
@@ -202,30 +228,32 @@ async function extractXlsx(bytes: Uint8Array): Promise<ExtractionOutcome> {
   const warnings: string[] = [];
   let formulas = 0;
   wb.eachSheet((ws) => {
-    const rows: string[][] = [];
-    let first = 0;
+    const rows: SheetRow[] = [];
     ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      if (!first) first = rowNumber;
       const vals: string[] = [];
       row.eachCell({ includeEmpty: true }, (cell, col) => {
         const v = cell.value as unknown;
         let s = "";
-        if (v == null) s = "";
+        // A merged range reports the master's value in every cell. Across a row (titles, banners) keep it once; down a
+        // column (a module ID spanning its sub-rows) keep it on every row, because each row belongs to it.
+        if (cell.isMerged && cell.master && cell.master.address !== cell.address && Number(cell.master.row) === rowNumber) s = "";
+        else if (v == null) s = "";
         else if (typeof v === "object" && v !== null && "formula" in (v as object)) {
           formulas++;
           const r = (v as { result?: unknown }).result;
-          s = r == null ? "" : String(typeof r === "object" && r && "error" in (r as object) ? (r as { error: string }).error : r);
+          s = r == null ? "" : typeof r === "number" ? num(r) : String(typeof r === "object" && r && "error" in (r as object) ? (r as { error: string }).error : r);
         } else if (typeof v === "object" && v !== null && "richText" in (v as object)) {
           s = ((v as { richText: { text: string }[] }).richText ?? []).map((t) => t.text).join("");
         } else if (typeof v === "object" && v !== null && "text" in (v as object)) {
           s = String((v as { text: unknown }).text);
         } else if (v instanceof Date) s = v.toISOString().slice(0, 10);
-        else s = String(v);
+        else s = typeof v === "number" ? num(v) : String(v);
         vals[col - 1] = s;
       });
-      rows.push(Array.from(vals, (x) => x ?? ""));
+      const r = Array.from(vals, (x) => x ?? "");
+      if (r.some((x) => x.trim())) rows.push({ n: rowNumber, vals: r });
     });
-    if (rows.length) blocks.push(...rowsToBlocks(ws.name, rows, first || 1, warnings));
+    if (rows.length) blocks.push(...rowsToBlocks(ws.name, rows, warnings));
   });
   if (formulas) warnings.push(`${formulas} formula cell(s): the stored cached value was used; formulas were not evaluated`);
   return done("exceljs", blocks, warnings);

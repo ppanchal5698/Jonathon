@@ -71,9 +71,32 @@ function mergeLocators(ls: Locator[]): Locator {
         out[`${key}_start`] = lo;
         out[`${key}_end`] = hi;
       }
-    } else out[key] = vals[0]!;
+    } else if (key === "range") out[key] = boundingRange(vals.map(String));
+    else out[key] = [...new Set(vals.map(String))].join(", ");
   }
   return out;
+}
+
+/** Smallest A1-style range covering all inputs ("A1:D2" + "A5:D7" → "A1:D7"). Falls back to a list if any is not A1-style. */
+function boundingRange(ranges: string[]): string {
+  const colNum = (c: string) => [...c].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+  const colName = (n: number) => {
+    let s = "";
+    for (let x = n; x > 0; x = Math.floor((x - 1) / 26)) s = String.fromCharCode(65 + ((x - 1) % 26)) + s;
+    return s;
+  };
+  let c1 = Infinity, r1 = Infinity, c2 = 0, r2 = 0;
+  for (const r of ranges) {
+    const m = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(r);
+    if (!m) return [...new Set(ranges)].join(", ");
+    const [a, b] = [colNum(m[1]!), Number(m[2])];
+    const [c, d] = m[3] ? [colNum(m[3]), Number(m[4])] : [a, b];
+    c1 = Math.min(c1, a, c);
+    r1 = Math.min(r1, b, d);
+    c2 = Math.max(c2, a, c);
+    r2 = Math.max(r2, b, d);
+  }
+  return `${colName(c1)}${r1}:${colName(c2)}${r2}`;
 }
 
 /** Split plain or Markdown text into heading-aware blocks with line locators. */

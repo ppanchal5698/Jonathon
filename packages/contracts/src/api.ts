@@ -99,6 +99,14 @@ export const ProposeRequirementChangeSchema = z.object({
   request_id: z.string().min(8).max(100),
 });
 
+/** Review actions on one knowledge item. confirmation must equal "<verb> <HUMAN-ID>" (approve/accept, reject/dismiss/withdraw, delete). */
+export const ReviewActionBodySchema = z.object({
+  expected_revision: z.number().int().positive(),
+  confirmation: z.string().max(100),
+  note: z.string().max(2_000).optional(),
+});
+export type ReviewActionBody = z.infer<typeof ReviewActionBodySchema>;
+
 export const DeleteSourceBodySchema = z.object({
   /** Must equal "delete <source display name>". */
   confirmation: z.string().max(300),

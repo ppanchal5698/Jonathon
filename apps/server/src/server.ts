@@ -13,6 +13,7 @@ import {
   LoginBodySchema,
   PasteTextBodySchema,
   ResolveConflictBodySchema,
+  ReviewActionBodySchema,
   SearchBodySchema,
   SetupAccountBodySchema,
   TransitionBodySchema,
@@ -130,9 +131,14 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
                 (SELECT COUNT(*) FROM knowledge_entities WHERE project_id = ? AND entity_type = 'requirement' AND approval_valid = 1) AS approved,
                 (SELECT COUNT(*) FROM knowledge_entities WHERE project_id = ? AND entity_type = 'conflict' AND status = 'open') AS open_conflicts,
                 (SELECT COUNT(*) FROM knowledge_entities WHERE project_id = ? AND entity_type = 'open_question' AND status = 'open') AS open_questions,
+                (SELECT COUNT(*) FROM knowledge_entities WHERE project_id = ? AND entity_type = 'change_proposal' AND status = 'open') AS open_proposals,
+                (SELECT COUNT(*) FROM knowledge_entities WHERE project_id = ? AND (
+                   (entity_type IN ('requirement','decision') AND status IN ('draft','in_review')) OR
+                   (entity_type IN ('open_question','conflict') AND status = 'open' AND COALESCE(json_extract(data, '$.fields.reviewed'), 0) = 0) OR
+                   (entity_type = 'change_proposal' AND status = 'open'))) AS to_review,
                 (SELECT COUNT(*) FROM jobs WHERE project_id = ? AND status IN ('queued','running','retrying')) AS active_jobs`,
       )
-      .get(p.id, p.id, p.id, p.id, p.id, p.id);
+      .get(p.id, p.id, p.id, p.id, p.id, p.id, p.id, p.id);
     return ok({ ...p, counts });
   });
   f.patch<{ Params: P }>("/api/v1/projects/:pid", { preHandler: authed }, async (req) =>
@@ -182,7 +188,7 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     const p = requireProject(app.ctx, req.principal!, req.params.pid, "write");
     if (!p.ai_enabled && config.mode !== "demo") throw new AppError("AI_DISABLED", "enable AI processing for this project first");
     app.sources.revision(p.id, req.params.rid);
-    return ok(app.ctx.queue.enqueue({ projectId: p.id, type: "extract_knowledge", payload: { revision_id: req.params.rid }, createdBy: req.principal!.kind === "user" ? req.principal!.username : "user", correlationId: req.id }));
+    return ok(app.ctx.queue.enqueue({ projectId: p.id, type: "extract_knowledge", payload: { revision_id: req.params.rid }, serialKey: `extract:${p.id}`, createdBy: req.principal!.kind === "user" ? req.principal!.username : "user", correlationId: req.id }));
   });
 
   // ----- knowledge -----
@@ -207,6 +213,16 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   );
   f.post<{ Params: P & { hid: string } }>("/api/v1/projects/:pid/entities/:hid/accept-proposed", { preHandler: authed }, async (req) =>
     ok(app.knowledge.acceptProposedStatements(req.principal!, req.params.pid, req.params.hid, parse(z.object({ expected_revision: z.number().int().positive() }), req.body).expected_revision)),
+  );
+  // Human review of AI-proposed items (UI only: MCP tokens and the worker are rejected by assertHuman).
+  f.post<{ Params: P & { hid: string } }>("/api/v1/projects/:pid/entities/:hid/accept", { preHandler: authed }, async (req) =>
+    ok(app.knowledge.accept(req.principal!, req.params.pid, req.params.hid, parse(ReviewActionBodySchema, req.body))),
+  );
+  f.post<{ Params: P & { hid: string } }>("/api/v1/projects/:pid/entities/:hid/reject", { preHandler: authed }, async (req) =>
+    ok(app.knowledge.reject(req.principal!, req.params.pid, req.params.hid, parse(ReviewActionBodySchema, req.body))),
+  );
+  f.delete<{ Params: P & { hid: string } }>("/api/v1/projects/:pid/entities/:hid", { preHandler: authed }, async (req) =>
+    ok(app.knowledge.remove(req.principal!, req.params.pid, req.params.hid, parse(ReviewActionBodySchema, req.body))),
   );
   f.get<{ Params: P & { hid: string } }>("/api/v1/projects/:pid/entities/:hid/history", { preHandler: authed }, async (req) =>
     ok(app.knowledge.history(req.principal!, req.params.pid, req.params.hid)),

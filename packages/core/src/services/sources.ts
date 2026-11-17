@@ -324,6 +324,8 @@ export class SourceService {
         payload: { revision_id: rev.id },
         createdBy: "system:worker",
         idempotencyKey: `extract:${rev.id}`,
+        // One drafting run per project at a time, so each document sees what the previous one created (no duplicate races).
+        serialKey: `extract:${rev.project_id}`,
         maxAttempts: 2,
       }).id;
     }

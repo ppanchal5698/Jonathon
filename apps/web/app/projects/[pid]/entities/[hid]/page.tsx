@@ -1,18 +1,21 @@
 "use client";
 
 import type { KnowledgeEntity, Project, Statement } from "@jonathon/contracts";
-import { useParams } from "next/navigation";
-import { type FormEvent, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { type FormEvent, Suspense, useState } from "react";
 import { Markdown } from "@/components/markdown";
+import { EntityEditor, needsReview, parseAddition, ReviewButtons, useReviewAction } from "@/components/review";
 import { Shell } from "@/components/shell";
 import { A, Badge, Button, Card, ConfirmPhrase, ErrorBanner, Field, Input, Loading, Notice, PageHeader, Select, Textarea, Time } from "@/components/ui";
-import { type ApiError, api, get, post } from "@/lib/api";
+import { type ApiError, get, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
 export default function EntityPage() {
   return (
     <Shell>
-      <EntityBody />
+      <Suspense fallback={<Loading />}>
+        <EntityBody />
+      </Suspense>
     </Shell>
   );
 }
@@ -31,17 +34,27 @@ function EntityBody() {
   const project = useApi<Project>(`/projects/${pid}`);
   const e = useApi<KnowledgeEntity>(`/projects/${pid}/entities/${hid}`);
   const history = useApi<{ revisions: number[]; events: Array<Record<string, any>> }>(`/projects/${pid}/entities/${hid}/history`);
+  const router = useRouter();
+  const params = useSearchParams();
   const [error, setError] = useState<ApiError | null>(null);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(params.get("edit") === "1");
+  const [done, setDone] = useState<string | null>(null);
   const reload = () => {
     setError(null);
     void e.reload();
     void history.reload();
   };
+  const { ask, modal } = useReviewAction(pid, (action, ent) => {
+    if (action === "delete") {
+      router.push(`/projects/${pid}?tab=${tabFor(ent.entity_type)}`);
+      return;
+    }
+    setDone(action === "accept" ? "Saved. The review decision is recorded in History." : "Saved.");
+    reload();
+  });
   if (e.error) return <ErrorBanner error={e.error} />;
   if (!e.data) return <Loading />;
   const ent = e.data;
-  const proposed = Object.values(ent.sections).flatMap((v) => (Array.isArray(v) ? (v as unknown[]).filter((s) => typeof s === "object" && (s as Statement).review_state === "proposed") : []));
 
   const crumbs = [
     { label: project.data?.name ?? "Project", href: `/projects/${pid}` },
@@ -71,35 +84,38 @@ function EntityBody() {
           <span className="text-theme-sm text-gray-500 dark:text-gray-400">revision {ent.revision}</span>
         </div>
       </PageHeader>
+      {modal}
       {error && (
         <div className="mb-6">
           <ErrorBanner error={error} />
         </div>
       )}
+      {done && !error && (
+        <p role="status" className="mb-6 rounded-xl border border-green-500 bg-green-50 px-4 py-3 text-theme-sm text-gray-700 dark:border-green-500/30 dark:bg-green-500/15 dark:text-gray-300">
+          {done}
+        </p>
+      )}
       <div className="grid grid-cols-12 gap-4 md:gap-6">
         <div className="col-span-12 space-y-4 md:space-y-6 xl:col-span-8">
           {editing ? (
-            <EditForm
-              pid={pid}
-              ent={ent}
-              onDone={() => {
-                setEditing(false);
-                reload();
-              }}
-              onError={setError}
-            />
+            <Card title={`Edit ${ent.human_id}`} desc={`Based on revision ${ent.revision}. Saving creates a new revision; earlier ones stay in history.`}>
+              <EntityEditor
+                pid={pid}
+                ent={ent}
+                onDone={() => {
+                  setEditing(false);
+                  setDone("Saved as a new revision.");
+                  router.replace(`/projects/${pid}/entities/${hid}`);
+                  reload();
+                }}
+                onCancel={() => {
+                  setEditing(false);
+                  router.replace(`/projects/${pid}/entities/${hid}`);
+                }}
+              />
+            </Card>
           ) : (
-            <Card
-              title={`Revision ${ent.revision}`}
-              actions={
-                ent.entity_type !== "change_proposal" &&
-                !["superseded", "rejected", "resolved", "accepted"].includes(ent.status) && (
-                  <Button variant="secondary" onClick={() => setEditing(true)}>
-                    Edit
-                  </Button>
-                )
-              }
-            >
+            <Card title={`Revision ${ent.revision}`}>
               {ent.approval_valid && (
                 <div className="mb-5">
                   <Notice tone="info">Editing an approved item creates a new revision in review; the approval stays with revision {ent.revision}.</Notice>
@@ -136,7 +152,16 @@ function EntityBody() {
           <Diff pid={pid} hid={hid} revisions={history.data?.revisions ?? []} />
         </div>
         <div className="col-span-12 space-y-4 md:space-y-6 xl:col-span-4">
-          <Review key={`review-${ent.revision}`} pid={pid} ent={ent} proposedCount={proposed.length} onDone={reload} onError={setError} />
+          <Card title="Review" desc={needsReview(ent) ? "Jonathon proposed this. It is not part of approved knowledge until you accept it." : undefined}>
+            <ReviewButtons pid={pid} ent={ent} onAsk={ask} onEdit={editing ? null : () => setEditing(true)} />
+            {ent.entity_type === "open_question" && ent.status === "open" && ent.fields.reviewed === true && (
+              <p className="mt-3 text-theme-xs text-gray-500 dark:text-gray-400">Reviewed. Record the answer below when you have it.</p>
+            )}
+            {ent.entity_type === "conflict" && ent.status === "open" && ent.fields.reviewed === true && (
+              <p className="mt-3 text-theme-xs text-gray-500 dark:text-gray-400">Reviewed. Resolve it with a decision below.</p>
+            )}
+          </Card>
+          <Review key={`review-${ent.revision}`} pid={pid} ent={ent} onDone={reload} onError={setError} />
           {ent.entity_type === "conflict" && ent.status === "open" && <ResolveConflict key={`resolve-${ent.revision}`} pid={pid} ent={ent} onDone={reload} onError={setError} />}
           {ent.entity_type === "open_question" && ent.status === "open" && <AnswerQuestion key={`answer-${ent.revision}`} pid={pid} ent={ent} onDone={reload} onError={setError} />}
           <Card title="History">
@@ -232,16 +257,25 @@ function Sections({ ent }: { ent: KnowledgeEntity }) {
               <Markdown text={v} />
             ) : (
               <ul className="list-disc space-y-2 pl-5 text-theme-sm text-gray-700 dark:text-gray-300">
-                {(v as Array<string | Statement>).map((s, i) =>
-                  typeof s === "string" ? <li key={i}>{s}</li> : (
+                {(v as Array<string | Statement>).map((s, i) => {
+                  const add = typeof s === "string" && k === "proposed_additions" ? parseAddition(s) : null;
+                  if (add)
+                    return (
+                      <li key={i}>
+                        <span className="text-theme-xs font-medium text-green-700 dark:text-green-400">+ {add.section}</span> {add.text}{" "}
+                        <Badge tone={add.basis === "AI-inferred" ? "primary" : "gray"}>{add.basis}</Badge>
+                      </li>
+                    );
+                  return typeof s === "string" ? <li key={i}>{s}</li> : (
                     <li key={i}>
                       {s.text}{" "}
                       {s.basis === "ai_inferred" && <Badge tone="primary">AI-inferred</Badge>}{" "}
                       {s.basis === "source_stated" && <Badge tone="gray">source-stated</Badge>}{" "}
+                      {s.basis === "human_authored" && <Badge tone="success">human-authored</Badge>}{" "}
                       {s.review_state === "proposed" && <Badge tone="warning">proposed, not reviewed</Badge>}
                     </li>
-                  ),
-                )}
+                  );
+                })}
               </ul>
             )}
           </section>
@@ -251,12 +285,14 @@ function Sections({ ent }: { ent: KnowledgeEntity }) {
   );
 }
 
-function Review({ pid, ent, proposedCount, onDone, onError }: { pid: string; ent: KnowledgeEntity; proposedCount: number; onDone: () => void; onError: (e: ApiError) => void }) {
-  const options = NEXT[ent.entity_type]?.[ent.status] ?? [];
+/** Status changes not covered by the review buttons (e.g. back to draft, supersede, reopen). */
+function Review({ pid, ent, onDone, onError }: { pid: string; ent: KnowledgeEntity; onDone: () => void; onError: (e: ApiError) => void }) {
+  const reviewTargets = ["approved", "rejected", "accepted", "dismissed", "withdrawn"];
+  const options = (NEXT[ent.entity_type]?.[ent.status] ?? []).filter((o) => !reviewTargets.includes(o));
   const [to, setTo] = useState(options[0] ?? "");
   const [confirm, setConfirm] = useState("");
   const [note, setNote] = useState("");
-  if (!options.length && (proposedCount === 0 || !["draft", "in_review"].includes(ent.status))) return null;
+  if (!options.length) return null;
   const verb = VERB[to];
   const phrase = verb ? `${verb} ${ent.human_id}` : "";
   const submit = async (e: FormEvent) => {
@@ -270,20 +306,7 @@ function Review({ pid, ent, proposedCount, onDone, onError }: { pid: string; ent
     }
   };
   return (
-    <Card title="Review">
-      {proposedCount > 0 && ["draft", "in_review"].includes(ent.status) && (
-        <div className="mb-5 rounded-xl border border-amber-500 bg-amber-50 p-4 text-theme-sm text-gray-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-gray-300">
-          <p>{proposedCount} AI-proposed statement(s) are not reviewed. Edit or remove the ones you disagree with, then accept the rest. Approval is blocked until then.</p>
-          <Button className="mt-2" variant="secondary" onClick={async () => {
-            try {
-              await post(`/projects/${pid}/entities/${ent.human_id}/accept-proposed`, { expected_revision: ent.revision });
-              onDone();
-            } catch (err) {
-              onError(err as ApiError);
-            }
-          }}>I reviewed them: accept all</Button>
-        </div>
-      )}
+    <Card title="Other status changes">
       {options.length > 0 && (
         <form onSubmit={submit} className="space-y-4">
           <Field label="Change status to">{(id) => (
@@ -347,31 +370,6 @@ function AnswerQuestion({ pid, ent, onDone, onError }: { pid: string; ent: Knowl
         <Field label="Answer" hint="Record what the client or you decided.">{(id) => <Textarea id={id} rows={3} value={resolution} onChange={(e) => setResolution(e.target.value)} required />}</Field>
         <ConfirmPhrase phrase={phrase} value={confirm} onChange={setConfirm} />
         <Button type="submit" disabled={confirm.trim().toLowerCase() !== phrase.toLowerCase()}>Save answer</Button>
-      </form>
-    </Card>
-  );
-}
-
-function EditForm({ pid, ent, onDone, onError }: { pid: string; ent: KnowledgeEntity; onDone: () => void; onError: (e: ApiError) => void }) {
-  const [title, setTitle] = useState(ent.title);
-  const [json, setJson] = useState(JSON.stringify({ fields: ent.fields, sections: ent.sections }, null, 2));
-  return (
-    <Card title={`Edit (based on revision ${ent.revision})`}>
-      <form className="space-y-4" onSubmit={async (e) => {
-        e.preventDefault();
-        try {
-          const parsed = JSON.parse(json) as { fields: Record<string, unknown>; sections: Record<string, unknown> };
-          await api("PUT", `/projects/${pid}/entities/${ent.human_id}`, { title, fields: parsed.fields, sections: parsed.sections, expected_revision: ent.revision });
-          onDone();
-        } catch (err) {
-          onError(err instanceof SyntaxError ? ({ code: "VALIDATION_FAILED", message: `Invalid JSON: ${err.message}` } as ApiError) : (err as ApiError));
-        }
-      }}>
-        <Field label="Title">{(id) => <Input id={id} value={title} onChange={(e) => setTitle(e.target.value)} required />}</Field>
-        <Field label="Fields and sections (JSON)" hint='Statements: {"text", "basis": source_stated | ai_inferred | human_authored, "review_state": proposed | accepted}. You can also edit the Markdown file directly; run reconciliation afterwards.'>
-          {(id) => <Textarea id={id} rows={18} value={json} onChange={(e) => setJson(e.target.value)} className="font-mono text-xs" />}
-        </Field>
-        <div className="flex gap-3"><Button type="submit">Save new revision</Button><Button variant="secondary" onClick={onDone}>Cancel</Button></div>
       </form>
     </Card>
   );

@@ -5,7 +5,8 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, Suspense, useRef, useState } from "react";
 import { Chat } from "@/components/chat";
 import { Shell } from "@/components/shell";
-import { ActivityIcon, AlertIcon, ChatIcon, ChecklistIcon, DocumentIcon, QuestionIcon, UploadIcon } from "@/components/icons";
+import { ActivityIcon, AlertIcon, ChatIcon, ChecklistIcon, DocumentIcon, InboxIcon, ProposalIcon, QuestionIcon, SparkleIcon, UploadIcon } from "@/components/icons";
+import { ReviewButtons, ReviewQueue, useReviewAction } from "@/components/review";
 import { PROJECT_SECTIONS } from "@/components/shell";
 import { A, Badge, Button, Card, Empty, ErrorBanner, Field, Input, Loading, Notice, PageHeader, Select, StatCard, Tabs, Textarea, Time, table } from "@/components/ui";
 import { type ApiError, api, post } from "@/lib/api";
@@ -35,6 +36,8 @@ function ProjectBody() {
   if (!project.data) return <Loading />;
   const p = project.data;
   const tabLabel = TABS.find(([k]) => k === tab)?.[1] ?? "Overview";
+  const toReview = p.counts.to_review ?? 0;
+  const tabs = TABS.map(([k, l]) => [k, k === "review" && toReview ? `Review (${toReview})` : l] as const);
   return (
     <>
       <PageHeader title={p.name} crumbs={[{ label: p.name, href: `/projects/${pid}` }, { label: tabLabel }]}>
@@ -45,16 +48,17 @@ function ProjectBody() {
         </div>
       </PageHeader>
       <div className="mb-6">
-        <Tabs label="Project sections" tabs={TABS} active={tab} onChange={(key) => router.replace(`/projects/${pid}?tab=${key}`)} />
+        <Tabs label="Project sections" tabs={tabs} active={tab} onChange={(key) => router.replace(`/projects/${pid}?tab=${key}`)} />
       </div>
       <div role="tabpanel">
         {tab === "overview" && <Overview project={p} />}
-        {tab === "documents" && <Documents pid={pid} aiEnabled={p.ai_enabled} />}
-        {tab === "requirements" && <EntityList pid={pid} type="requirement" />}
-        {tab === "decisions" && <EntityList pid={pid} type="decision" />}
-        {tab === "conflicts" && <EntityList pid={pid} type="conflict" />}
-        {tab === "questions" && <EntityList pid={pid} type="open_question" />}
-        {tab === "proposals" && <EntityList pid={pid} type="change_proposal" />}
+        {tab === "review" && <ReviewQueue pid={pid} onChanged={() => void project.reload()} />}
+        {tab === "documents" && <Documents pid={pid} aiEnabled={p.ai_enabled} onProcessed={() => void project.reload()} />}
+        {tab === "requirements" && <EntityList key="requirement" pid={pid} type="requirement" onChanged={() => void project.reload()} />}
+        {tab === "decisions" && <EntityList key="decision" pid={pid} type="decision" onChanged={() => void project.reload()} />}
+        {tab === "conflicts" && <EntityList key="conflict" pid={pid} type="conflict" onChanged={() => void project.reload()} />}
+        {tab === "questions" && <EntityList key="open_question" pid={pid} type="open_question" onChanged={() => void project.reload()} />}
+        {tab === "proposals" && <EntityList key="change_proposal" pid={pid} type="change_proposal" onChanged={() => void project.reload()} />}
         {tab === "chat" && <Chat pid={pid} />}
         {tab === "settings" && <Settings project={p} onSaved={() => project.reload()} />}
       </div>
@@ -68,12 +72,19 @@ function Overview({ project }: { project: ProjectWithCounts }) {
   const base = `/projects/${project.id}?tab=`;
   return (
     <div className="space-y-4 md:space-y-6">
+      {(c.to_review ?? 0) > 0 && (
+        <Notice tone="info" title={`${c.to_review} item${c.to_review === 1 ? "" : "s"} waiting for your review`}>
+          Jonathon proposed these from your documents. Approve, edit, reject or delete them in <A href={`${base}review`}>Review</A>.
+        </Notice>
+      )}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:gap-6 xl:grid-cols-3">
+        <StatCard icon={<InboxIcon />} label="Waiting for review" value={c.to_review ?? 0} href={`${base}review`} footer={c.to_review ? <Badge tone="primary">review now</Badge> : <Badge tone="success">all reviewed</Badge>} />
         <StatCard icon={<DocumentIcon />} label="Documents" value={c.sources ?? 0} href={`${base}documents`} />
         <StatCard icon={<ChecklistIcon />} label="Requirements" value={c.requirements ?? 0} href={`${base}requirements`} footer={<Badge tone="success">{`${c.approved ?? 0} approved`}</Badge>} />
         <StatCard icon={<ActivityIcon />} label="Active jobs" value={c.active_jobs ?? 0} href={`${base}documents`} />
         <StatCard icon={<AlertIcon />} label="Open conflicts" value={c.open_conflicts ?? 0} href={`${base}conflicts`} footer={c.open_conflicts ? <Badge tone="orange">needs a decision</Badge> : null} />
         <StatCard icon={<QuestionIcon />} label="Open questions" value={c.open_questions ?? 0} href={`${base}questions`} />
+        <StatCard icon={<ProposalIcon />} label="Open change proposals" value={c.open_proposals ?? 0} href={`${base}proposals`} />
         <StatCard icon={<ChatIcon />} label="Ask about this project" value="Chat" href={`${base}chat`} />
       </div>
       <div className="grid grid-cols-12 gap-4 md:gap-6">
@@ -101,9 +112,19 @@ function Overview({ project }: { project: ProjectWithCounts }) {
   );
 }
 
-function Documents({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }) {
+function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: boolean; onProcessed: () => void }) {
   const sources = useApi<Source[]>(`/projects/${pid}/sources`, { pollMs: 2_000, pollWhile: (s) => s.some((x) => x.current?.extraction_status === "pending") });
-  const jobs = useApi<Job[]>(`/projects/${pid}/jobs`, { pollMs: 2_000, pollWhile: (j) => j.some((x) => ["queued", "running", "retrying"].includes(x.status)) });
+  const wasActive = useRef(false);
+  const jobs = useApi<Job[]>(`/projects/${pid}/jobs`, {
+    pollMs: 2_000,
+    pollWhile: (j) => {
+      const busy = j.some((x) => ["queued", "running", "retrying"].includes(x.status));
+      // When processing finishes, refresh the project counts (review badge) once.
+      if (wasActive.current && !busy) onProcessed();
+      wasActive.current = busy;
+      return busy;
+    },
+  });
   const fileRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
@@ -121,7 +142,11 @@ function Documents({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }) {
     try {
       const r = await api<{ duplicate: boolean; source: Source }[]>("POST", `/projects/${pid}/sources`, form);
       const dups = r.filter((x) => x.duplicate).map((x) => x.source.display_name);
-      setNotice(dups.length ? `Already in this project (not stored again): ${dups.join(", ")}` : `${r.length} file(s) stored. Extraction is queued.`);
+      setNotice(
+        dups.length
+          ? `Already in this project (not stored again): ${dups.join(", ")}`
+          : `${r.length} file(s) stored. ${aiEnabled ? "Jonathon will extract the text, then propose requirements, open questions, conflicts and changes for you to review." : "Text extraction is queued."}`,
+      );
       void sources.reload();
       void jobs.reload();
     } catch (e) {
@@ -135,7 +160,7 @@ function Documents({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }) {
     e.preventDefault();
     try {
       const r = await post<{ duplicate: boolean }>(`/projects/${pid}/sources/paste`, paste);
-      setNotice(r.duplicate ? `"${paste.title}" has the same text as an existing source; not stored again.` : `"${paste.title}" stored. Extraction is queued.`);
+      setNotice(r.duplicate ? `"${paste.title}" has the same text as an existing source; not stored again.` : `"${paste.title}" stored. ${aiEnabled ? "Proposals will appear in Review." : "Extraction is queued."}`);
       setError(null);
       setPaste({ title: "", text: "" });
       void sources.reload();
@@ -145,6 +170,7 @@ function Documents({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }) {
     }
   };
   const active = (jobs.data ?? []).filter((j) => ["queued", "running", "retrying"].includes(j.status));
+  const interpreted = (jobs.data ?? []).filter((j) => j.type === "extract_knowledge" && !["queued", "running", "retrying"].includes(j.status)).slice(0, 5);
 
   return (
     <div className="grid grid-cols-12 gap-4 md:gap-6">
@@ -205,12 +231,47 @@ function Documents({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }) {
                   <span className="size-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" aria-hidden="true" />
                   <Badge>{j.status}</Badge>
                   <span className="text-gray-700 dark:text-gray-300">
-                    {j.type.replace("_", " ")}
+                    {j.type === "extract_knowledge" ? "AI drafting requirements" : j.type === "ingest" ? "extracting text" : j.type.replace("_", " ")}
                     {j.progress ? ` · ${j.progress.stage}${j.progress.detail ? ` (${j.progress.detail})` : ""}` : ""}
                   </span>
                 </li>
               ))}
             </ul>
+          </Card>
+        )}
+        {interpreted.length > 0 && (
+          <Card title="AI drafts from documents" desc="What Jonathon proposed from each processed document. Nothing is approved until you review it.">
+            <ul className="space-y-3">
+              {interpreted.map((j) => {
+                const r = (j.result ?? {}) as { document?: string; counts?: Record<string, number>; skipped_duplicates?: number };
+                const c = r.counts ?? {};
+                return (
+                  <li key={j.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 p-3 text-theme-sm dark:border-gray-800">
+                    <SparkleIcon className="size-5 shrink-0 text-brand-500" />
+                    <span className="min-w-0 flex-1 text-gray-700 dark:text-gray-300">
+                      <span className="font-medium text-gray-800 dark:text-white/90">{r.document ?? "Document"}</span>
+                      {j.status === "succeeded" ? (
+                        <span className="block text-theme-xs text-gray-500 dark:text-gray-400">
+                          {[["requirements", "requirement"], ["questions", "question"], ["conflicts", "conflict"], ["proposals", "change proposal"]]
+                            .map(([k, w]) => `${c[k!] ?? 0} ${w}${(c[k!] ?? 0) === 1 ? "" : "s"}`)
+                            .join(" · ")}
+                          {r.skipped_duplicates ? ` · ${r.skipped_duplicates} duplicate${r.skipped_duplicates === 1 ? "" : "s"} skipped` : ""}
+                        </span>
+                      ) : (
+                        <span className="block text-theme-xs text-red-600 dark:text-red-400">{j.error_message ?? j.status}</span>
+                      )}
+                    </span>
+                    <Badge>{j.status}</Badge>
+                    <span className="text-theme-xs text-gray-500 dark:text-gray-400">
+                      <Time iso={j.finished_at ?? j.updated_at} />
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="mt-4">
+              <A href={`/projects/${pid}?tab=review`}>Open the review queue</A>
+            </div>
           </Card>
         )}
       </div>
@@ -247,7 +308,9 @@ function Documents({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }) {
           </p>
           {!aiEnabled && (
             <div className="mt-3">
-              <Notice tone="warning">AI processing is off: documents are extracted and searchable, but no draft requirements are proposed.</Notice>
+              <Notice tone="warning">
+                AI processing is off: documents are extracted and searchable, but nothing is proposed for review. Turn it on in <A href={`/projects/${pid}?tab=settings`}>Settings</A>.
+              </Notice>
             </div>
           )}
           {notice && (
@@ -287,16 +350,20 @@ const TYPE_TITLE: Record<string, string> = {
   change_proposal: "Change proposals",
 };
 
-function EntityList({ pid, type }: { pid: string; type: string }) {
+function EntityList({ pid, type, onChanged }: { pid: string; type: string; onChanged: () => void }) {
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
   const list = useApi<KnowledgeEntity[]>(`/projects/${pid}/entities?type=${type}${status ? `&status=${status}` : ""}`);
+  const { ask, modal } = useReviewAction(pid, () => {
+    void list.reload();
+    onChanged();
+  });
   const [creating, setCreating] = useState(false);
   const shown = (list.data ?? []).filter((e) => !q || `${e.human_id} ${e.title}`.toLowerCase().includes(q.toLowerCase()));
   return (
     <Card
       title={TYPE_TITLE[type] ?? type}
-      desc={type === "change_proposal" ? "Proposed by developers or Claude Code. Nothing is applied automatically." : "Only items with a valid human approval are treated as approved."}
+      desc={type === "change_proposal" ? "Changes to existing requirements, proposed by AI extraction from new documents, by developers or by Claude Code. Nothing is applied until you accept it." : "Only items with a valid human approval are treated as approved."}
       actions={
         type !== "change_proposal" && (
           <Button variant={creating ? "secondary" : "primary"} onClick={() => setCreating(!creating)}>
@@ -305,6 +372,7 @@ function EntityList({ pid, type }: { pid: string; type: string }) {
         )
       }
     >
+      {modal}
       {creating && (
         <NewEntity
           pid={pid}
@@ -341,6 +409,9 @@ function EntityList({ pid, type }: { pid: string; type: string }) {
                 <th className={table.th}>Flags</th>
                 <th className={table.th}>Status</th>
                 <th className={table.th}>Rev.</th>
+                <th className={table.th}>
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -356,6 +427,7 @@ function EntityList({ pid, type }: { pid: string; type: string }) {
                     <div className="flex flex-wrap gap-1">
                       {e.fields.blocking === true && <Badge tone="error">blocking</Badge>}
                       {e.fields.origin === "ai_proposed" && <Badge tone="primary">AI-proposed</Badge>}
+                      {e.fields.reviewed === true && e.status === "open" && <Badge tone="success">reviewed</Badge>}
                       {e.status === "approved" && !e.approval_valid && <Badge tone="error">approval not valid</Badge>}
                       {e.file_state !== "ok" && <Badge tone="error">{e.file_state}</Badge>}
                       {e.stale && <Badge tone="gray">stale</Badge>}
@@ -365,6 +437,11 @@ function EntityList({ pid, type }: { pid: string; type: string }) {
                     <Badge>{e.status}</Badge>
                   </td>
                   <td className={`${table.td} text-theme-xs text-gray-500`}>{e.revision}</td>
+                  <td className={`${table.td} text-right`}>
+                    <div className="flex justify-end">
+                      <ReviewButtons pid={pid} ent={e} onAsk={ask} size="sm" />
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

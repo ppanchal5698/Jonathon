@@ -229,6 +229,8 @@ export const ENTITY_SPECS: Record<EntityType, EntitySpec> = {
       feature_scopes: "string_list",
       related_requirements: "string_list",
       origin: "string",
+      /** A human confirmed that this AI-proposed question is worth tracking (it stays open until answered). */
+      reviewed: "boolean",
     },
   },
   conflict: {
@@ -245,6 +247,8 @@ export const ENTITY_SPECS: Record<EntityType, EntitySpec> = {
       related_requirements: "string_list",
       resolution_decision: "string",
       origin: "string",
+      /** A human confirmed that this AI-proposed conflict is real (it stays open until resolved). */
+      reviewed: "boolean",
     },
   },
   change_proposal: {
@@ -254,7 +258,12 @@ export const ENTITY_SPECS: Record<EntityType, EntitySpec> = {
     statuses: ["open", "accepted", "rejected", "stale"],
     initialStatus: "open",
     approvalStatuses: [],
-    sections: { proposed_change: "text", rationale: "text" },
+    /**
+     * proposed_change/rationale: free text (developer agents, humans).
+     * proposed_description / proposed_additions: structured edits proposed by AI extraction from a new document.
+     * Each addition is "[<section> · <basis>] <statement>"; accepting the proposal applies them to the requirement.
+     */
+    sections: { proposed_change: "text", rationale: "text", proposed_description: "text", proposed_additions: "list" },
     fields: {
       requirement_id: "string",
       base_revision: "number",

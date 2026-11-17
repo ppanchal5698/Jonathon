@@ -170,5 +170,20 @@ export const ModelExtractionSchema = z.object({
       }),
     )
     .max(20),
+  /** Changes to requirements that already exist (listed in the prompt by id). Applied only when a human accepts. */
+  requirement_updates: z
+    .array(
+      z.object({
+        requirement_id: z.string().max(32),
+        change_summary: z.string().min(3).max(500),
+        proposed_description: z.string().max(4_000),
+        added_behavior: statementList(10),
+        added_validation_rules: statementList(10),
+        added_acceptance_criteria: statementList(10),
+        rationale: z.string().max(1_000),
+        evidence_ids: z.array(z.string().max(16)).min(1).max(10),
+      }),
+    )
+    .max(20),
 });
 export type ModelExtraction = z.infer<typeof ModelExtractionSchema>;

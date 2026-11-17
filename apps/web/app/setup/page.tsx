@@ -40,7 +40,8 @@ function DataNotice({ status }: { status: Status }) {
       <p>{status.ai_notice}</p>
       <ul className="mt-2 list-disc space-y-1 pl-5">
         <li>
-          AI processing is <strong>off</strong> for every new project until you enable it in that project&apos;s settings.
+          You choose per project whether AI processing is on: the new-project form asks (ticked by default so uploads are drafted into requirements for your review), and
+          you can turn it off at any time in that project&apos;s settings.
         </li>
         <li>Stored files are not encrypted by Jonathon. Protect the data folder with your operating system&apos;s disk encryption.</li>
         <li>Deleting a document in Jonathon cannot remove copies the model provider or Antigravity&apos;s own transcript store may keep.</li>
