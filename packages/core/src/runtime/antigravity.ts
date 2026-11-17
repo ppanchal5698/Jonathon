@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Logger } from "../logger";
 import { AppError } from "../util";
 import { NdjsonParser } from "./ndjson";
-import { AGENTS, type PolicyPaths, prepareWorkspace, writePolicyFiles } from "./policy";
+import { AGENTS, EXTRACTION_EFFORT_SCHEMAS, type PolicyPaths, prepareWorkspace, writePolicyFiles } from "./policy";
 import { killProcessTree, treeSpawnOptions } from "./process-tree";
 import type {
   AuthInfo,
@@ -115,6 +115,9 @@ export class AntigravityCliRuntime implements ReasoningRuntime {
   readonly provider = "antigravity-cli" as const;
   private policy: PolicyPaths;
   private running = new Set<Running>();
+  /** Runs waiting for a free process slot (team agents run in parallel; the slot count caps agy processes). */
+  private slotsInUse = 0;
+  private waiters: Array<() => void> = [];
   private version: string | null = null;
 
   constructor(private readonly o: AntigravityOptions) {
@@ -218,14 +221,43 @@ export class AntigravityCliRuntime implements ReasoningRuntime {
     return this.run({ ...req, resumeConversationId: conversationId });
   }
 
+  /** Wait for a process slot instead of refusing: several team agents may ask at once. */
+  private async acquireSlot(signal?: AbortSignal): Promise<void> {
+    const max = this.o.maxConcurrent ?? Number.POSITIVE_INFINITY;
+    while (this.slotsInUse >= max) {
+      if (signal?.aborted) throw new AppError("JOB_CANCELLED", "cancelled while waiting for the runtime");
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          signal?.removeEventListener("abort", wake);
+          resolve();
+        };
+        this.waiters.push(wake);
+        signal?.addEventListener("abort", wake, { once: true });
+      });
+    }
+    this.slotsInUse++;
+  }
+
+  private releaseSlot(): void {
+    this.slotsInUse--;
+    this.waiters.shift()?.();
+  }
+
   async run(req: RuntimeRunRequest): Promise<NormalizedRuntimeResult> {
     if (req.prompt.length > this.o.maxPromptChars) {
       throw new AppError("VALIDATION_FAILED", `prompt exceeds the configured limit of ${this.o.maxPromptChars} characters`);
     }
     if (req.signal?.aborted) throw new AppError("JOB_CANCELLED", "cancelled before start");
-    if (this.o.maxConcurrent && this.running.size >= this.o.maxConcurrent) {
-      throw new AppError("RATE_LIMITED", "too many concurrent runtime processes", { retryable: true });
+    req.onProgress?.("waiting for a runtime slot");
+    await this.acquireSlot(req.signal);
+    try {
+      return await this.runInSlot(req);
+    } finally {
+      this.releaseSlot();
     }
+  }
+
+  private async runInSlot(req: RuntimeRunRequest): Promise<NormalizedRuntimeResult> {
     if (req.resumeConversationId && !/^[0-9a-f-]{36}$/i.test(req.resumeConversationId)) {
       throw new AppError("INTERNAL", "invalid stored runtime conversation id");
     }
@@ -250,7 +282,7 @@ export class AntigravityCliRuntime implements ReasoningRuntime {
       "--disable-slash-commands",
     ];
     if (this.o.model) args.push("--model", this.o.model);
-    const effort = req.schema === "extraction" ? (this.o.extractionEffort ?? this.o.effort) : this.o.effort;
+    const effort = EXTRACTION_EFFORT_SCHEMAS.has(req.schema) ? (this.o.extractionEffort ?? this.o.effort) : this.o.effort;
     if (effort) args.push("--effort", effort);
     if (req.resumeConversationId) args.push("--conversation", req.resumeConversationId);
 

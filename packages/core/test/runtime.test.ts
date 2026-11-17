@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENT_NAME, isPidAlive, NdjsonParser, sanitizeStderr } from "@jonathon/core";
+import { AGENT_NAME, AGENTS, isPidAlive, NdjsonParser, sanitizeStderr } from "@jonathon/core";
 import { describe, expect, it } from "vitest";
 import { fakeRuntime, tempDir } from "./helpers";
 
@@ -34,7 +34,8 @@ describe("Antigravity runtime adapter (fixture playback, not live)", () => {
     expect(seen.args).toEqual(expect.arrayContaining(["--agent", AGENT_NAME, "--sandbox", "--disable-slash-commands", "--settings", "--json-schema", "--input-format", "stream-json"]));
     for (const forbidden of ["--dangerously-skip-permissions", "--continue", "-c", "-p", "--print", "--prompt"]) expect(seen.args).not.toContain(forbidden);
     expect(seen.args.join(" ")).not.toContain("Customers must verify"); // prompt never on the command line
-    expect(seen.workspace.map((w) => w.replace(/\\/g, "/"))).toEqual([".agents", ".agents/agents", ".agents/agents/jonathon-extractor.md", `.agents/agents/${AGENT_NAME}.md`]);
+    // Only Jonathon's own tool-free agent definitions (one per team role); nothing else.
+    expect(seen.workspace.map((w) => w.replace(/\\/g, "/")).sort()).toEqual([".agents", ".agents/agents", ...Object.values(AGENTS).map((a) => `.agents/agents/${a.name}.md`)].sort());
     expect(seen.env).not.toContain("JONATHON_SECRET_PROBE");
     const settingsPath = seen.args[seen.args.indexOf("--settings") + 1]!;
     const settings = JSON.parse(readFileSync(settingsPath, "utf8"));

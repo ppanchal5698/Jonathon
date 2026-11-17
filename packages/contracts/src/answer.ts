@@ -78,6 +78,19 @@ export const AnswerSchema = z.object({
   knowledge_revision: z.number().int(),
   warnings: z.array(z.string()),
   runtime: RuntimeInfoSchema,
+  /**
+   * Claim check by the answer-verifier agent. Every factual sentence of the draft answer is checked against the
+   * evidence; unsupported sentences are removed from answer_markdown and listed in `removed` with the reason.
+   * null when no check ran (no model used, or the team workflow is off).
+   */
+  verification: z
+    .object({
+      checked: z.number().int(),
+      supported: z.number().int(),
+      removed: z.array(z.object({ text: z.string(), reason: z.string() })),
+    })
+    .nullable()
+    .default(null),
 });
 export type Answer = z.infer<typeof AnswerSchema>;
 
@@ -187,3 +200,57 @@ export const ModelExtractionSchema = z.object({
     .max(20),
 });
 export type ModelExtraction = z.infer<typeof ModelExtractionSchema>;
+
+// ---------- agent team: one schema per role (each is handed to `agy --json-schema`) ----------
+
+export const DOCUMENT_KINDS = ["requirements_spec", "brief_or_proposal", "setup_or_runbook", "plan_or_estimate", "meeting_notes_or_email", "other"] as const;
+
+/** Classifier: what kind of document this is, so only the relevant specialists run. */
+export const ModelClassificationSchema = z.object({
+  document_kind: z.enum(DOCUMENT_KINDS),
+  subject_system: z.string().max(200),
+  numbered_item_prefixes: z.array(z.string().max(12)).max(10),
+  summary: z.string().max(600),
+});
+export type ModelClassification = z.infer<typeof ModelClassificationSchema>;
+
+/** Specialists: each returns only its own part of a draft. */
+export const ModelRequirementsSchema = ModelExtractionSchema.pick({ requirements: true });
+export const ModelQuestionsSchema = ModelExtractionSchema.pick({ open_questions: true });
+export const ModelConflictsSchema = ModelExtractionSchema.pick({ conflicts: true });
+export const ModelChangesSchema = ModelExtractionSchema.pick({ requirement_updates: true });
+
+export const VERDICTS = ["supported", "partly_supported", "unsupported"] as const;
+
+/**
+ * Draft verifier: one verdict per candidate (R1, Q1, C1, U1 ...). For partly supported candidates it lists the
+ * statement ids (R1-2 ...) the evidence does not support.
+ */
+export const ModelDraftVerificationSchema = z.object({
+  verdicts: z
+    .array(
+      z.object({
+        candidate_id: z.string().max(16),
+        verdict: z.enum(VERDICTS),
+        unsupported_statement_ids: z.array(z.string().max(16)).max(40),
+        reason: z.string().max(400),
+      }),
+    )
+    .max(200),
+});
+export type ModelDraftVerification = z.infer<typeof ModelDraftVerificationSchema>;
+
+/** Answer verifier: one verdict per numbered claim (S1, S2 ...) of a draft answer. */
+export const ModelAnswerVerificationSchema = z.object({
+  claims: z
+    .array(
+      z.object({
+        claim_id: z.string().max(16),
+        verdict: z.enum(["supported", "unsupported", "not_a_claim"]),
+        evidence_ids: z.array(z.string().max(16)).max(10),
+        reason: z.string().max(400),
+      }),
+    )
+    .max(120),
+});
+export type ModelAnswerVerification = z.infer<typeof ModelAnswerVerificationSchema>;

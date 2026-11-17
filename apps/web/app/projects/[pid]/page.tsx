@@ -243,7 +243,12 @@ function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: bo
           <Card title="AI drafts from documents" desc="What Jonathon proposed from each processed document. Nothing is approved until you review it.">
             <ul className="space-y-3">
               {interpreted.map((j) => {
-                const r = (j.result ?? {}) as { document?: string; counts?: Record<string, number>; skipped_duplicates?: number };
+                const r = (j.result ?? {}) as {
+                  document?: string;
+                  counts?: Record<string, number>;
+                  skipped_duplicates?: number;
+                  team?: { document_kind: string | null; agents: Record<string, { runs: number; ms: number }>; checked: number; rejected_count: number; rejected: { kind: string; text: string; by: string; reason: string }[] };
+                };
                 const c = r.counts ?? {};
                 return (
                   <li key={j.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 p-3 text-theme-sm dark:border-gray-800">
@@ -260,6 +265,7 @@ function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: bo
                       ) : (
                         <span className="block text-theme-xs text-red-600 dark:text-red-400">{j.error_message ?? j.status}</span>
                       )}
+                      {r.team && <TeamSummary team={r.team} />}
                     </span>
                     <Badge>{j.status}</Badge>
                     <span className="text-theme-xs text-gray-500 dark:text-gray-400">
@@ -528,5 +534,56 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         </div>
       </form>
     </Card>
+  );
+}
+
+const AGENT_NAMES: Record<string, string> = {
+  classify: "Classifier",
+  requirements: "Requirements",
+  questions: "Questions",
+  conflicts: "Conflicts",
+  changes: "Changes",
+  verify_draft: "Verifier",
+};
+const KIND_LABEL: Record<string, string> = {
+  requirements_spec: "requirements document",
+  brief_or_proposal: "brief or proposal",
+  setup_or_runbook: "setup guide",
+  plan_or_estimate: "plan or estimate",
+  meeting_notes_or_email: "notes or email",
+  other: "other document",
+};
+
+/** What the agent team did for one document: who ran, and what the verifier and code checks removed (with reasons). */
+function TeamSummary({ team }: { team: { document_kind: string | null; agents: Record<string, { runs: number; ms: number }>; checked: number; rejected_count: number; rejected: { kind: string; text: string; by: string; reason: string }[] } }) {
+  const agents = Object.entries(team.agents).filter(([k]) => AGENT_NAMES[k]);
+  return (
+    <span className="mt-1.5 block text-theme-xs text-gray-500 dark:text-gray-400">
+      <span className="flex flex-wrap items-center gap-1">
+        {team.document_kind && <Badge tone="gray">{KIND_LABEL[team.document_kind] ?? team.document_kind}</Badge>}
+        {agents.map(([k, v]) => (
+          <Badge key={k} tone={k === "verify_draft" ? "success" : "primary"}>{`${AGENT_NAMES[k]}${v.runs > 1 ? ` ×${v.runs}` : ""}`}</Badge>
+        ))}
+      </span>
+      <span className="mt-1 block">
+        Verifier checked {team.checked} item{team.checked === 1 ? "" : "s"}
+        {team.rejected_count ? `; ${team.rejected_count} removed as not supported by the document` : "; nothing removed"}.
+      </span>
+      {team.rejected.length > 0 && (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-brand-500 dark:text-brand-400">Show what was removed and why</summary>
+          <ul className="mt-1 space-y-1">
+            {team.rejected.map((x, i) => (
+              <li key={i} className="rounded-lg bg-gray-50 px-2 py-1 dark:bg-white/[0.03]">
+                <span className="text-gray-700 dark:text-gray-300">{x.text}</span>{" "}
+                <span className="text-gray-500">
+                  ({x.kind}, removed by {x.by === "code" ? "code check" : "verifier"}: {x.reason})
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </span>
   );
 }

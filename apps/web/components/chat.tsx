@@ -280,6 +280,33 @@ function AnswerView({ answer, stale, onCite, pid }: { answer: Answer; stale: boo
           <ul className="list-disc pl-5 italic">{answer.inferences.map((q, i) => <li key={i}>{q}</li>)}</ul>
         </div>
       )}
+      {answer.verification ? (
+        <div className="rounded-xl bg-white p-3 text-theme-xs text-gray-700 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-800">
+          <span className="font-semibold text-gray-800 dark:text-white/90">Claim check: </span>
+          <Badge tone={answer.verification.removed.length ? "warning" : "success"}>
+            {answer.verification.removed.length
+              ? `${answer.verification.removed.length} unsupported claim${answer.verification.removed.length === 1 ? "" : "s"} removed`
+              : `${answer.verification.supported} of ${answer.verification.checked} claims supported`}
+          </Badge>{" "}
+          <span className="text-gray-500 dark:text-gray-400">A separate verifier agent checked each statement against the evidence.</span>
+          {answer.verification.removed.length > 0 && (
+            <details className="mt-1">
+              <summary className="cursor-pointer text-brand-500 dark:text-brand-400">Show removed claims</summary>
+              <ul className="mt-1 list-disc pl-5">
+                {answer.verification.removed.map((r, i) => (
+                  <li key={i}>
+                    <span className="line-through decoration-red-400">{r.text}</span> <span className="text-gray-500">({r.reason})</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      ) : (
+        answer.runtime.provider === "antigravity-cli" && (
+          <p className="rounded-xl bg-amber-50 p-3 text-theme-xs text-amber-700 dark:bg-amber-500/15 dark:text-orange-400">Claims in this answer were not checked by the verifier.</p>
+        )
+      )}
       <div className="rounded-xl bg-white p-3 text-theme-xs text-gray-700 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-300 dark:ring-gray-800">
         <span className="font-semibold text-gray-800 dark:text-white/90">Implementation ready{answer.readiness_scope ? ` (${answer.readiness_scope})` : ""}: </span>
         <Badge tone={answer.implementation_ready ? "success" : "error"}>{answer.implementation_ready ? "yes" : "no"}</Badge>

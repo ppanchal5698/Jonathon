@@ -1,6 +1,16 @@
 import { lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { ModelExtractionSchema, ModelTurnSchema } from "@jonathon/contracts";
+import {
+  ModelAnswerVerificationSchema,
+  ModelChangesSchema,
+  ModelClassificationSchema,
+  ModelConflictsSchema,
+  ModelDraftVerificationSchema,
+  ModelExtractionSchema,
+  ModelQuestionsSchema,
+  ModelRequirementsSchema,
+  ModelTurnSchema,
+} from "@jonathon/contracts";
 import { z } from "zod";
 import { readText, writeFileAtomic } from "../storage/fsutil";
 import { ensureDirInside, resolveInside } from "../storage/paths";
@@ -66,9 +76,99 @@ ${TRUST_RULES}
 - Return the structured output once. Keep it concise.
 `;
 
+// ---------- the agent team: one tool-free agent per job ----------
+
+const NO_INVENTION = `- Never invent numbers, limits, durations, dates, names, roles or behaviour. Every value you write must appear in the evidence.
+- Copy wording from the evidence wherever you can. Jonathon checks wording and numbers against the evidence and drops what it cannot find.
+- When you are unsure, leave the item out. A missing item is better than an invented one.`;
+
+const role = (title: string, job: string, rules: string) => `# System Prompt
+
+You are the ${title} in Jonathon's agent team. You have no tools. You do exactly one job:
+${job}
+Other agents do the other jobs; do not do theirs.
+
+${TRUST_RULES}
+
+## Rules
+${NO_INVENTION}
+${rules}
+- Return the structured output once. Keep it concise.
+`;
+
+export const CLASSIFIER_SYSTEM_PROMPT = role(
+  "document classifier",
+  "say what kind of client document the evidence comes from, which product or system it is about, and which numbering prefixes it uses for requirements (for example FR, NFR, INT).",
+  `- requirements_spec: states what a product must do. brief_or_proposal: describes the product or solution at a high level.
+  setup_or_runbook: configuration or operating steps. plan_or_estimate: tasks, schedules, milestones, hours, costs, trackers.
+  meeting_notes_or_email: discussion or correspondence. other: anything else.
+- The summary is two or three plain sentences about the document's content, using its own words.`,
+);
+
+export const REQUIREMENTS_SYSTEM_PROMPT = role(
+  "requirements specialist",
+  "propose DRAFT requirements that this document states, each with a description and the statements the evidence supports.",
+  `- When the document numbers its requirements (FR-01, NFR-03 ...), create one requirement per numbered item, start the title with that number and copy its text.
+- Statements in preconditions, behavior, alternate_flows, validation_rules and acceptance_criteria must each be backed by the cited evidence. Do not add criteria the client did not state.
+- Do not repeat a requirement that already exists (listed in <existing_requirements>).
+- Cite only E ids (this document).`,
+);
+
+export const QUESTIONS_SYSTEM_PROMPT = role(
+  "open-questions specialist",
+  "list the questions the client must answer because a needed rule, value, owner or decision is missing, vague or explicitly left open in this document.",
+  `- Ask only about things the evidence leaves open. If the evidence already answers it, do not ask.
+- Include questions the document itself lists as open. Keep each question short and specific.
+- Do not repeat an existing question (listed in <existing_questions_and_conflicts>).
+- Cite only E ids (this document).`,
+);
+
+export const CONFLICTS_SYSTEM_PROMPT = role(
+  "conflicts specialist",
+  "find places where this document disagrees with itself, with an existing requirement, or with a passage from another document (O ids): a different technology, number, date, rule, role or scope for the same thing.",
+  `- Side A must cite this document (E ids). Side B cites E ids, O ids or an existing requirement id (REQ-...).
+- Both sides must talk about the same product, system or rule. Different applications are not in conflict.
+- A difference in detail, or one source being more specific, is not a conflict. Do not choose a side.
+- Do not repeat an existing conflict.`,
+);
+
+export const CHANGES_SYSTEM_PROMPT = role(
+  "change-proposal specialist",
+  "propose updates to EXISTING requirements (listed in <existing_requirements>) where this document adds a statement or changes the description.",
+  `- Use only requirement ids from <existing_requirements>. Never create new requirements.
+- Put only statements that are new and stated by this document in added_behavior, added_validation_rules or added_acceptance_criteria.
+- Use an empty proposed_description unless the document clearly changes the description.
+- Plans, schedules and estimates do not change requirements. Cite only E ids.`,
+);
+
+export const DRAFT_VERIFIER_SYSTEM_PROMPT = role(
+  "draft verifier",
+  "check every candidate drafted by the other agents against the evidence and give one verdict per candidate.",
+  `- supported: everything in the candidate is stated by the cited evidence (wording may differ, meaning must not).
+- partly_supported: list the statement ids (for example R1-3) that the evidence does not state. Statements that add numbers, limits, roles or criteria the evidence does not contain are unsupported.
+- unsupported: the candidate's main claim is not in the evidence, a "question" is already answered by the evidence, a "conflict" is not a real disagreement about the same thing, or a change adds nothing the evidence states.
+- Judge only from the evidence shown. Do not use outside knowledge. Give a short reason for anything not supported.`,
+);
+
+export const ANSWER_VERIFIER_SYSTEM_PROMPT = role(
+  "answer verifier",
+  "check each numbered claim (S1, S2 ...) of a draft answer against the evidence and give one verdict per claim.",
+  `- supported: the evidence states it (wording may differ, meaning must not); list the evidence ids that state it.
+- unsupported: the evidence does not state it, or the claim goes further than the evidence (adds numbers, owners, certainty or approval status).
+- not_a_claim: headings, connecting phrases, or sentences that only say what is unknown, open, unapproved or in conflict.
+- Judge only from the evidence shown. Do not use outside knowledge.`,
+);
+
 export const AGENTS = {
   answer: { name: AGENT_NAME, description: "Tool-free evidence reasoner used by Jonathon. Answers only from evidence supplied in the message.", prompt: AGENT_SYSTEM_PROMPT },
   extraction: { name: EXTRACTOR_AGENT_NAME, description: "Tool-free draft extractor used by Jonathon. Proposes drafts only from evidence supplied in the message.", prompt: EXTRACTOR_SYSTEM_PROMPT },
+  classify: { name: "jonathon-classifier", description: "Tool-free document classifier in Jonathon's agent team.", prompt: CLASSIFIER_SYSTEM_PROMPT },
+  requirements: { name: "jonathon-requirements", description: "Tool-free requirements specialist in Jonathon's agent team.", prompt: REQUIREMENTS_SYSTEM_PROMPT },
+  questions: { name: "jonathon-questions", description: "Tool-free open-questions specialist in Jonathon's agent team.", prompt: QUESTIONS_SYSTEM_PROMPT },
+  conflicts: { name: "jonathon-conflicts", description: "Tool-free conflicts specialist in Jonathon's agent team.", prompt: CONFLICTS_SYSTEM_PROMPT },
+  changes: { name: "jonathon-changes", description: "Tool-free change-proposal specialist in Jonathon's agent team.", prompt: CHANGES_SYSTEM_PROMPT },
+  verify_draft: { name: "jonathon-draft-verifier", description: "Tool-free verifier that checks drafted knowledge against evidence.", prompt: DRAFT_VERIFIER_SYSTEM_PROMPT },
+  verify_answer: { name: "jonathon-answer-verifier", description: "Tool-free verifier that checks answer claims against evidence.", prompt: ANSWER_VERIFIER_SYSTEM_PROMPT },
 } as const;
 
 export function agentFileContent(schema: keyof typeof AGENTS = "answer"): string {
@@ -104,7 +204,17 @@ export const SESSION_SETTINGS = {
 export const SCHEMAS = {
   answer: ModelTurnSchema,
   extraction: ModelExtractionSchema,
+  classify: ModelClassificationSchema,
+  requirements: ModelRequirementsSchema,
+  questions: ModelQuestionsSchema,
+  conflicts: ModelConflictsSchema,
+  changes: ModelChangesSchema,
+  verify_draft: ModelDraftVerificationSchema,
+  verify_answer: ModelAnswerVerificationSchema,
 } as const;
+
+/** Every role except the answerer reads client documents at the (faster) extraction effort. */
+export const EXTRACTION_EFFORT_SCHEMAS: ReadonlySet<SchemaName> = new Set(["extraction", "classify", "requirements", "questions", "conflicts", "changes", "verify_draft", "verify_answer"]);
 export type SchemaName = keyof typeof SCHEMAS;
 
 export function jsonSchemaFor(name: SchemaName): Record<string, unknown> {
@@ -125,7 +235,7 @@ export function writePolicyFiles(dataDir: string): PolicyPaths {
   const settingsPath = resolveInside(dataDir, "runtime-policy", "session-settings.json");
   const settingsText = `${JSON.stringify(SESSION_SETTINGS, null, 2)}\n`;
   if (readText(settingsPath) !== settingsText) writeFileAtomic(settingsPath, settingsText);
-  const hashes: string[] = [sha256(settingsText), sha256(agentFileContent("answer")), sha256(agentFileContent("extraction"))];
+  const hashes: string[] = [sha256(settingsText), ...(Object.keys(AGENTS) as (keyof typeof AGENTS)[]).map((k) => sha256(agentFileContent(k)))];
   for (const name of Object.keys(SCHEMAS) as SchemaName[]) {
     const p = resolveInside(dataDir, "runtime-policy", `${name}.schema.json`);
     const text = `${JSON.stringify(jsonSchemaFor(name), null, 2)}\n`;

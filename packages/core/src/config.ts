@@ -29,6 +29,10 @@ const EnvSchema = z.object({
   AGY_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
   /** Draft extraction ran for 4+ minutes at the default effort on agy 1.5.9 and finished in ~14 s at "low" (live probe). */
   AGY_EXTRACTION_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max", "default"]).default("low"),
+  /** Most agy processes at once (team agents run in parallel; extra runs wait for a slot). */
+  AGY_MAX_CONCURRENT: z.coerce.number().int().min(1).max(16).default(4),
+  /** Team workflow: specialist agents plus verifiers. Off = the earlier single-agent drafting and unverified answers. */
+  JONATHON_AGENT_TEAM: bool.default(true),
   AGY_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(30 * 60_000).default(240_000),
   AGY_MAX_OUTPUT_BYTES: z.coerce.number().int().min(64_000).default(4 * 1024 * 1024),
   AGY_MAX_PROMPT_CHARS: z.coerce.number().int().min(10_000).max(2_000_000).default(200_000),
@@ -66,6 +70,8 @@ export type JonathonConfig = {
     effort: string | undefined;
     extractionEffort: string | undefined;
     timeoutMs: number;
+    maxConcurrent: number;
+    agentTeam: boolean;
     maxOutputBytes: number;
     maxPromptChars: number;
     retrievalIterations: number;
@@ -144,6 +150,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, repoRoot = find
       effort: e.AGY_EFFORT,
       extractionEffort: e.AGY_EXTRACTION_EFFORT === "default" ? undefined : e.AGY_EXTRACTION_EFFORT,
       timeoutMs: e.AGY_TIMEOUT_MS,
+      maxConcurrent: e.AGY_MAX_CONCURRENT,
+      agentTeam: e.JONATHON_AGENT_TEAM,
       maxOutputBytes: e.AGY_MAX_OUTPUT_BYTES,
       maxPromptChars: e.AGY_MAX_PROMPT_CHARS,
       retrievalIterations: e.JONATHON_RETRIEVAL_ITERATIONS,

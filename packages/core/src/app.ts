@@ -52,7 +52,7 @@ export function createRuntime(config: JonathonConfig, log: Logger): ReasoningRun
     timeoutMs: config.runtime.timeoutMs,
     maxOutputBytes: config.runtime.maxOutputBytes,
     maxPromptChars: config.runtime.maxPromptChars,
-    maxConcurrent: config.workerConcurrency,
+    maxConcurrent: config.runtime.maxConcurrent,
     log,
   });
 }
