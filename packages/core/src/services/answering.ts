@@ -503,6 +503,9 @@ export class AnswerService {
     const hits = searchProject(this.ctx.db, projectId, query, { limit: max });
     const chosen = new Map<string, (typeof hits)[number]>();
     for (const h of hits) chosen.set(h.chunk_id, h);
+    // Original client text is the ground truth. Drafts derived from it (often many per document) must not crowd it
+    // out of the context, so the best source passages are always added as well.
+    for (const h of searchProject(this.ctx.db, projectId, query, { types: ["source"], limit: Math.ceil(max / 2), exclude: new Set(chosen.keys()) })) chosen.set(h.chunk_id, h);
     if (previousQuestion) {
       for (const h of searchProject(this.ctx.db, projectId, previousQuestion, { limit: Math.ceil(max / 2), exclude: new Set(chosen.keys()) })) chosen.set(h.chunk_id, h);
     }

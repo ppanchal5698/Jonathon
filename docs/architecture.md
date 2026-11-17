@@ -85,6 +85,33 @@ Verified versions are in [compatibility.md](compatibility.md).
    Near-duplicates of existing items are skipped (normalized text, token overlap with plural folding). Nothing produced
    here is approved or applied.
 
+### Agent team (`JONATHON_AGENT_TEAM`, default on)
+
+Drafting and answering are done by a team of tool-free `agy` agents, each defined in the runtime workspace with its own
+system prompt, its own JSON schema and exactly one job. Code orchestrates them and has the last word.
+
+| Step | Agent / check | Job |
+|---|---|---|
+| 1 | `jonathon-classifier` (once per document) | Document kind (requirements spec, brief, setup guide, plan/estimate, notes, other), subject system, numbering prefixes. Routes the specialists: plans and estimates never get the requirements or change specialists. |
+| 2 | `jonathon-requirements`, `jonathon-questions`, `jonathon-conflicts`, `jonathon-changes` (in parallel per batch) | Each drafts only its own kind of item from the batch. Only the conflicts specialist sees other-document `O` passages. |
+| 3 | Code gate | Drops any statement, question, conflict side or requirement title whose numbers or client IDs are not in the evidence it cites (evidence IDs such as `E3` and Jonathon IDs are ignored). |
+| 4 | `jonathon-draft-verifier` | Gets every remaining candidate (`R1`, `R1-2`, `Q1`, `C1`, `U1` ...) and only the evidence those candidates cite. Returns supported / partly supported (with the unsupported statement IDs) / unsupported. Fail-closed: a candidate without a verdict is not kept. |
+| 5 | Code | Statement basis (client-stated vs AI-inferred) by wording match, de-duplication, persistence as drafts. |
+
+Every removal (by the code gate or the verifier) is recorded with its reason in the job result and shown under the
+document on the Documents page. If any agent fails or returns output that does not match its schema, the job fails
+(retryable) and nothing unverified is saved.
+
+Answers: after the answering agent, `jonathon-answer-verifier` checks each sentence of the draft answer (`S1`, `S2` ...)
+against the same evidence. Unsupported claims are removed from the answer and listed with the reason
+(`answer.verification`); the status is lowered from `answered` and readiness is denied. If the verifier cannot run, the
+answer is kept but labelled unverified and is never `answered`. Retrieval always includes the best original source
+passages in addition to the mixed search, so derived drafts cannot crowd out client text.
+
+Team agents run in parallel up to `AGY_MAX_CONCURRENT` (default 4) `agy` processes per process; further runs wait for a
+slot. All team roles use the extraction effort (`AGY_EXTRACTION_EFFORT`, default `low`). Demo mode and
+`JONATHON_AGENT_TEAM=false` use the earlier single-agent drafting and unverified answers.
+
 ### Review (accept / edit / reject / delete)
 
 The project's **Review** tab lists every item still waiting for a human: draft or in-review requirements and decisions,

@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 17 Nov 2026, 2:35 PM IST.
+Last updated: 17 Nov 2026, 4:23 PM IST.
 
 Legend: **Live-verified** = exercised against the real `agy` 1.5.9 or a real MCP SDK client on this machine.
 **Fixture-tested** = automated tests through real code paths with recorded or fake inputs (no network).
@@ -174,3 +174,18 @@ and the `claude mcp add` syntax is from the docs, but no Claude Code session was
   drafted before the spec found the FastAPI/React/PostgreSQL vs .NET/Angular/Azure SQL clash it had missed. Still open:
   an open question answered by a later document is not linked to that answer; one RUD open question (external log-ins)
   was not raised; DOCX equations duplicated in one file. Tests: 80 unit/integration, 1 e2e, 4 live, lint, typecheck pass.
+* **17 Nov 2026, 4:23 PM IST**: multi-agent workflow (docs/architecture.md, "Agent team"): classifier, four parallel specialists, a
+  code gate for numbers and client IDs, a fail-closed draft verifier, and a claim verifier for answers. Live run on the
+  same 8-document corpus: all 8 document kinds classified correctly; 89 of 89 numbered requirements covered (87 as
+  their own item, no duplicate IDs); all 10 of the spec's own open questions raised (the "external log-ins" one was
+  missed before); 18 conflicts including the spec's internal "landed cost with or without burden" inconsistency that
+  no earlier run found; the verifier checked 234 candidates and removed 4 with reasons (for example a conflict between
+  two different processes), the code gate removed 2 conflicts with numbers not in their evidence. A 20-statement spot
+  check found 17 faithful rewordings and 3 small invented details (labelled AI-inferred); the specialist and verifier
+  prompts were tightened for invented preconditions, implementation details and dropped options, and a re-run on two
+  documents went from many inferred preconditions to 3 and removed "PDF or Excel" where the source says "PDF, Excel or
+  email". Answers: 8 of 8 correct after retrieval was changed to always include source passages (the freight question
+  had answered "unknown" when derived drafts crowded the source table out of the context); 1 unsupported concluding
+  claim removed by the answer verifier. Still open: the question specialist raises many logistics questions from
+  dependency lists ("When will X provide Y?"), and paraphrased duplicates that differ by a number are kept.
+  Tests: 90 unit/integration, e2e and 4 live pass.

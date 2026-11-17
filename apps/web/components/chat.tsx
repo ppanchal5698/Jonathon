@@ -303,7 +303,7 @@ function AnswerView({ answer, stale, onCite, pid }: { answer: Answer; stale: boo
           )}
         </div>
       ) : (
-        answer.runtime.provider === "antigravity-cli" && (
+        answer.runtime.provider === "antigravity-cli" && answer.status !== "insufficient_evidence" && (
           <p className="rounded-xl bg-amber-50 p-3 text-theme-xs text-amber-700 dark:bg-amber-500/15 dark:text-orange-400">Claims in this answer were not checked by the verifier.</p>
         )
       )}

@@ -110,6 +110,7 @@ export const REQUIREMENTS_SYSTEM_PROMPT = role(
   "propose DRAFT requirements that this document states, each with a description and the statements the evidence supports.",
   `- When the document numbers its requirements (FR-01, NFR-03 ...), create one requirement per numbered item, start the title with that number and copy its text.
 - Statements in preconditions, behavior, alternate_flows, validation_rules and acceptance_criteria must each be backed by the cited evidence. Do not add criteria the client did not state.
+- Leave preconditions and alternate_flows empty unless the evidence states them. Do not add implementation details (field names, IDs, screens, steps) the evidence does not mention, and do not drop options it lists.
 - Do not repeat a requirement that already exists (listed in <existing_requirements>).
 - Cite only E ids (this document).`,
 );
@@ -146,6 +147,7 @@ export const DRAFT_VERIFIER_SYSTEM_PROMPT = role(
   "check every candidate drafted by the other agents against the evidence and give one verdict per candidate.",
   `- supported: everything in the candidate is stated by the cited evidence (wording may differ, meaning must not).
 - partly_supported: list the statement ids (for example R1-3) that the evidence does not state. Statements that add numbers, limits, roles or criteria the evidence does not contain are unsupported.
+  So are preconditions and implementation details (field names, IDs, screens, steps) the evidence does not state, and statements that leave out an option the evidence lists ("PDF or Excel" when it says "PDF, Excel or email").
 - unsupported: the candidate's main claim is not in the evidence, a "question" is already answered by the evidence, a "conflict" is not a real disagreement about the same thing, or a change adds nothing the evidence states.
 - Judge only from the evidence shown. Do not use outside knowledge. Give a short reason for anything not supported.`,
 );
