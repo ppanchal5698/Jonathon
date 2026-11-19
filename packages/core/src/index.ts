@@ -20,3 +20,6 @@ export * from "./services/projects";
 export * from "./services/sources";
 export * from "./storage";
 export * from "./util";
+export * from "./services/graph";
+export * from "./services/documents";
+export * from "./docs/catalogue";

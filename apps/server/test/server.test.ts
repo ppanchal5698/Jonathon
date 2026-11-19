@@ -23,7 +23,12 @@ let otherPid = "";
 async function api(method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}), ...(csrf && method !== "GET" ? { "x-csrf-token": csrf } : {}), ...headers },
+    headers: {
+      ...(body !== undefined ? { "content-type": "application/json" } : {}),
+      ...(cookie ? { cookie } : {}),
+      ...(csrf && method !== "GET" ? { "x-csrf-token": csrf } : {}),
+      ...headers,
+    },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const json = (await res.json().catch(() => null)) as { data?: unknown; error?: { code: string } } | null;
@@ -55,8 +60,20 @@ function toolJson(r: unknown): { isError?: boolean; body: Record<string, unknown
 
 beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), "jon-srv-"));
-  const config = loadConfig({ JONATHON_DATA_DIR: dataDir, JONATHON_PORT: String(PORT), JONATHON_LOG_LEVEL: "silent", JONATHON_ASK_WAIT_MS: "0" } as NodeJS.ProcessEnv);
-  const runtime = new AntigravityCliRuntime({ dataDir, executable: process.execPath, argsPrefix: [FAKE_AGY, "--scenario", "answer-cite", "--"], timeoutMs: 15_000, maxOutputBytes: 1e6, maxPromptChars: 2e5 });
+  const config = loadConfig({
+    JONATHON_DATA_DIR: dataDir,
+    JONATHON_PORT: String(PORT),
+    JONATHON_LOG_LEVEL: "silent",
+    JONATHON_ASK_WAIT_MS: "0",
+  } as NodeJS.ProcessEnv);
+  const runtime = new AntigravityCliRuntime({
+    dataDir,
+    executable: process.execPath,
+    argsPrefix: [FAKE_AGY, "--scenario", "answer-cite", "--"],
+    timeoutMs: 15_000,
+    maxOutputBytes: 1e6,
+    maxPromptChars: 2e5,
+  });
   app = createApp(config, { runtime, log: createLogger("silent", "t") });
   server = await buildServer(app);
   await server.listen({ host: "127.0.0.1", port: PORT });
@@ -80,13 +97,21 @@ describe("HTTP API security", () => {
 
   it("sets up the single local account, signs in, and requires CSRF for mutations", async () => {
     expect((await api("GET", "/api/v1/setup/status")).json?.data).toMatchObject({ set_up: false });
-    const setup = await fetch(`${BASE}/api/v1/setup/account`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "parth", password: "correct horse battery" }) });
+    const setup = await fetch(`${BASE}/api/v1/setup/account`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "parth", password: "correct horse battery" }),
+    });
     expect(setup.status).toBe(200);
     cookie = (setup.headers.get("set-cookie") ?? "").split(";")[0]!;
     expect(setup.headers.get("set-cookie")).toMatch(/HttpOnly; SameSite=Strict/);
     csrf = ((await setup.json()) as { data: { csrf_token: string } }).data.csrf_token;
     expect((await api("POST", "/api/v1/setup/account", { username: "other", password: "another long password" })).json?.error?.code).toBe("ALREADY_SET_UP");
-    const noCsrf = await fetch(`${BASE}/api/v1/projects`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ name: "x" }) });
+    const noCsrf = await fetch(`${BASE}/api/v1/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ name: "x" }),
+    });
     expect(noCsrf.status).toBe(403);
     expect((await fetch(`${BASE}/api/v1/projects`)).status).toBe(401);
     // After setup, the absolute data path is only shown to the signed-in user.
@@ -119,7 +144,11 @@ describe("MCP server (real MCP SDK client over Streamable HTTP)", () => {
   let readTokenId = "";
 
   it("rejects requests without a valid bearer token", async () => {
-    const r = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+    const r = await fetch(`${BASE}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
     expect(r.status).toBe(401);
   });
 
@@ -136,8 +165,24 @@ describe("MCP server (real MCP SDK client over Streamable HTTP)", () => {
 
   it("lists tools; there is no approval, write or shell tool", async () => {
     const c = await mcpClient(readToken);
-    const names = (await c.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["ask_jonathon", "get_feature_spec", "get_job", "get_requirement", "list_projects", "propose_requirement_change", "search_knowledge"]);
+    const tools = (await c.listTools()).tools;
+    const names = tools.map((t) => t.name).sort();
+    expect(names).toEqual([
+      "ask_jonathon",
+      "explore_memory_graph",
+      "get_document",
+      "get_feature_spec",
+      "get_job",
+      "get_requirement",
+      "list_documents",
+      "list_projects",
+      "propose_requirement_change",
+      "search_knowledge",
+      "search_memory_graph",
+    ]);
+    // Document and graph tools only read.
+    for (const n of ["explore_memory_graph", "get_document", "list_documents", "search_memory_graph"])
+      expect(tools.find((t) => t.name === n)?.annotations?.readOnlyHint).toBe(true);
     await c.close();
   });
 
@@ -163,7 +208,17 @@ describe("MCP server (real MCP SDK client over Streamable HTTP)", () => {
 
   it("ask_jonathon returns a pending job that get_job resolves (application-level polling), with follow-ups", async () => {
     const c = await mcpClient(readToken);
-    const first = toolJson(await c.callTool({ name: "ask_jonathon", arguments: { project_id: demoPid, message: "Must customers verify their email before signing in?", feature_scope: "email-verification", request_id: "mcp-req-0001" } }));
+    const first = toolJson(
+      await c.callTool({
+        name: "ask_jonathon",
+        arguments: {
+          project_id: demoPid,
+          message: "Must customers verify their email before signing in?",
+          feature_scope: "email-verification",
+          request_id: "mcp-req-0001",
+        },
+      }),
+    );
     expect(first.body.status).toBe("pending");
     let answer: Record<string, unknown> | undefined;
     for (let i = 0; i < 60 && !answer; i++) {
@@ -175,7 +230,12 @@ describe("MCP server (real MCP SDK client over Streamable HTTP)", () => {
     expect(answer!.citations).not.toEqual([]);
     expect(answer!.implementation_ready).toBe(false);
     // Idempotent: same request_id → same job, no duplicate turn.
-    const replay = toolJson(await c.callTool({ name: "ask_jonathon", arguments: { project_id: demoPid, message: "Must customers verify their email before signing in?", request_id: "mcp-req-0001" } }));
+    const replay = toolJson(
+      await c.callTool({
+        name: "ask_jonathon",
+        arguments: { project_id: demoPid, message: "Must customers verify their email before signing in?", request_id: "mcp-req-0001" },
+      }),
+    );
     expect(replay.body.conversation_id).toBe(answer!.conversation_id);
     const convs = app.answers.listConversations({ kind: "user", userId: "x", username: "x" }, demoPid);
     expect(convs.filter((cv) => cv.owner_kind === "mcp_token")).toHaveLength(1);
@@ -184,19 +244,54 @@ describe("MCP server (real MCP SDK client over Streamable HTTP)", () => {
 
   it("read-only tokens cannot propose; propose-scoped tokens can, idempotently", async () => {
     const c = await mcpClient(readToken);
-    const denied = toolJson(await c.callTool({ name: "propose_requirement_change", arguments: { project_id: demoPid, requirement_id: "REQ-001", base_revision: 2, proposed_change: "Add rate limit.", rationale: "Abuse.", request_id: "prop-0001" } }));
+    const denied = toolJson(
+      await c.callTool({
+        name: "propose_requirement_change",
+        arguments: {
+          project_id: demoPid,
+          requirement_id: "REQ-001",
+          base_revision: 2,
+          proposed_change: "Add rate limit.",
+          rationale: "Abuse.",
+          request_id: "prop-0001",
+        },
+      }),
+    );
     expect((denied.body.error as { code: string }).code).toBe("FORBIDDEN");
     await c.close();
-    const t2 = (await api("POST", "/api/v1/mcp/tokens", { name: "claude-propose", project_ids: [demoPid], scopes: ["read", "propose"] })).json?.data as { token: string };
+    const t2 = (await api("POST", "/api/v1/mcp/tokens", { name: "claude-propose", project_ids: [demoPid], scopes: ["read", "propose"] })).json?.data as {
+      token: string;
+    };
     // Rotation keeps the original lifetime (a 30-day token must not become permanent).
-    const t30 = (await api("POST", "/api/v1/mcp/tokens", { name: "short", project_ids: [demoPid], scopes: ["read"], expires_in_days: 30 })).json?.data as { id: string };
+    const t30 = (await api("POST", "/api/v1/mcp/tokens", { name: "short", project_ids: [demoPid], scopes: ["read"], expires_in_days: 30 })).json?.data as {
+      id: string;
+    };
     const rotated = (await api("POST", `/api/v1/mcp/tokens/${t30.id}/rotate`, {})).json?.data as { id: string };
-    const row = app.ctx.db.prepare("SELECT created_at, expires_at FROM mcp_tokens WHERE id = ?").get(rotated.id) as { created_at: string; expires_at: string | null };
+    const row = app.ctx.db.prepare("SELECT created_at, expires_at FROM mcp_tokens WHERE id = ?").get(rotated.id) as {
+      created_at: string;
+      expires_at: string | null;
+    };
     expect(row.expires_at).not.toBeNull();
     expect(Math.round((Date.parse(row.expires_at!) - Date.parse(row.created_at)) / 86_400_000)).toBe(30);
     const c2 = await mcpClient(t2.token);
-    const rev = (toolJson(await c2.callTool({ name: "get_requirement", arguments: { project_id: demoPid, requirement_id: "REQ-001" } })).body.entity as { revision: number }).revision;
-    const ok = toolJson(await c2.callTool({ name: "propose_requirement_change", arguments: { project_id: demoPid, requirement_id: "REQ-001", base_revision: rev, proposed_change: "Add rate limit.", rationale: "Abuse.", request_id: "prop-0002" } }));
+    const rev = (
+      toolJson(await c2.callTool({ name: "get_requirement", arguments: { project_id: demoPid, requirement_id: "REQ-001" } })).body.entity as {
+        revision: number;
+      }
+    ).revision;
+    const ok = toolJson(
+      await c2.callTool({
+        name: "propose_requirement_change",
+        arguments: {
+          project_id: demoPid,
+          requirement_id: "REQ-001",
+          base_revision: rev,
+          proposed_change: "Add rate limit.",
+          rationale: "Abuse.",
+          request_id: "prop-0002",
+        },
+      }),
+    );
     expect(ok.body.proposal_id).toMatch(/^CHANGE-\d{3}$/);
     await c2.close();
   });

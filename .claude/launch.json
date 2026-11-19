@@ -16,6 +16,15 @@
         "scripts/qa.mjs"
       ],
       "port": 3191
+    },
+    {
+      "name": "jonathon-qa-reuse",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "scripts/qa.mjs",
+        "--reuse-last"
+      ],
+      "port": 3191
     }
   ]
 }

@@ -4,11 +4,42 @@ import type { Job, KnowledgeEntity, Project, Source } from "@jonathon/contracts"
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, Suspense, useRef, useState } from "react";
 import { Chat } from "@/components/chat";
+import { MemoryGraph } from "@/components/memory-graph";
 import { Shell } from "@/components/shell";
-import { ActivityIcon, AlertIcon, ChatIcon, ChecklistIcon, DocumentIcon, InboxIcon, ProposalIcon, QuestionIcon, SparkleIcon, UploadIcon } from "@/components/icons";
+import {
+  ActivityIcon,
+  AlertIcon,
+  ChatIcon,
+  ChecklistIcon,
+  DocumentIcon,
+  InboxIcon,
+  ProposalIcon,
+  QuestionIcon,
+  SparkleIcon,
+  UploadIcon,
+} from "@/components/icons";
 import { ReviewButtons, ReviewQueue, useReviewAction } from "@/components/review";
+import { TechDocs } from "@/components/techdocs";
 import { PROJECT_SECTIONS } from "@/components/shell";
-import { A, Badge, Button, Card, Empty, ErrorBanner, Field, Input, Loading, Notice, PageHeader, Select, StatCard, Tabs, Textarea, Time, table } from "@/components/ui";
+import {
+  A,
+  Badge,
+  Button,
+  Card,
+  Empty,
+  ErrorBanner,
+  Field,
+  Input,
+  Loading,
+  Notice,
+  PageHeader,
+  Select,
+  StatCard,
+  Tabs,
+  Textarea,
+  Time,
+  table,
+} from "@/components/ui";
 import { type ApiError, api, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
@@ -59,6 +90,8 @@ function ProjectBody() {
         {tab === "conflicts" && <EntityList key="conflict" pid={pid} type="conflict" onChanged={() => void project.reload()} />}
         {tab === "questions" && <EntityList key="open_question" pid={pid} type="open_question" onChanged={() => void project.reload()} />}
         {tab === "proposals" && <EntityList key="change_proposal" pid={pid} type="change_proposal" onChanged={() => void project.reload()} />}
+        {tab === "techdocs" && <TechDocs pid={pid} aiEnabled={p.ai_enabled} />}
+        {tab === "graph" && <MemoryGraph key={params.get("node") ?? "graph"} pid={pid} aiEnabled={p.ai_enabled} initialNode={params.get("node")} />}
         {tab === "chat" && <Chat pid={pid} />}
         {tab === "settings" && <Settings project={p} onSaved={() => project.reload()} />}
       </div>
@@ -78,11 +111,29 @@ function Overview({ project }: { project: ProjectWithCounts }) {
         </Notice>
       )}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:gap-6 xl:grid-cols-3">
-        <StatCard icon={<InboxIcon />} label="Waiting for review" value={c.to_review ?? 0} href={`${base}review`} footer={c.to_review ? <Badge tone="primary">review now</Badge> : <Badge tone="success">all reviewed</Badge>} />
+        <StatCard
+          icon={<InboxIcon />}
+          label="Waiting for review"
+          value={c.to_review ?? 0}
+          href={`${base}review`}
+          footer={c.to_review ? <Badge tone="primary">review now</Badge> : <Badge tone="success">all reviewed</Badge>}
+        />
         <StatCard icon={<DocumentIcon />} label="Documents" value={c.sources ?? 0} href={`${base}documents`} />
-        <StatCard icon={<ChecklistIcon />} label="Requirements" value={c.requirements ?? 0} href={`${base}requirements`} footer={<Badge tone="success">{`${c.approved ?? 0} approved`}</Badge>} />
+        <StatCard
+          icon={<ChecklistIcon />}
+          label="Requirements"
+          value={c.requirements ?? 0}
+          href={`${base}requirements`}
+          footer={<Badge tone="success">{`${c.approved ?? 0} approved`}</Badge>}
+        />
         <StatCard icon={<ActivityIcon />} label="Active jobs" value={c.active_jobs ?? 0} href={`${base}documents`} />
-        <StatCard icon={<AlertIcon />} label="Open conflicts" value={c.open_conflicts ?? 0} href={`${base}conflicts`} footer={c.open_conflicts ? <Badge tone="orange">needs a decision</Badge> : null} />
+        <StatCard
+          icon={<AlertIcon />}
+          label="Open conflicts"
+          value={c.open_conflicts ?? 0}
+          href={`${base}conflicts`}
+          footer={c.open_conflicts ? <Badge tone="orange">needs a decision</Badge> : null}
+        />
         <StatCard icon={<QuestionIcon />} label="Open questions" value={c.open_questions ?? 0} href={`${base}questions`} />
         <StatCard icon={<ProposalIcon />} label="Open change proposals" value={c.open_proposals ?? 0} href={`${base}proposals`} />
         <StatCard icon={<ChatIcon />} label="Ask about this project" value="Chat" href={`${base}chat`} />
@@ -95,7 +146,10 @@ function Overview({ project }: { project: ProjectWithCounts }) {
           <ol className="relative space-y-4 border-l border-gray-200 pl-5 dark:border-gray-800">
             {(activity.data ?? []).slice(0, 12).map((a) => (
               <li key={a.id} className="relative">
-                <span className="absolute top-1.5 -left-[25px] size-2.5 rounded-full border-2 border-white bg-brand-500 dark:border-gray-900" aria-hidden="true" />
+                <span
+                  className="absolute top-1.5 -left-[25px] size-2.5 rounded-full border-2 border-white bg-brand-500 dark:border-gray-900"
+                  aria-hidden="true"
+                />
                 <p className="text-theme-sm text-gray-800 dark:text-white/90">
                   {a.action.replace(/[._]/g, " ")}
                   {a.entity_id ? <span className="font-mono text-gray-500 dark:text-gray-400"> {a.entity_id}</span> : null}
@@ -160,7 +214,11 @@ function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: bo
     e.preventDefault();
     try {
       const r = await post<{ duplicate: boolean }>(`/projects/${pid}/sources/paste`, paste);
-      setNotice(r.duplicate ? `"${paste.title}" has the same text as an existing source; not stored again.` : `"${paste.title}" stored. ${aiEnabled ? "Proposals will appear in Review." : "Extraction is queued."}`);
+      setNotice(
+        r.duplicate
+          ? `"${paste.title}" has the same text as an existing source; not stored again.`
+          : `"${paste.title}" stored. ${aiEnabled ? "Proposals will appear in Review." : "Extraction is queued."}`,
+      );
       setError(null);
       setPaste({ title: "", text: "" });
       void sources.reload();
@@ -247,7 +305,13 @@ function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: bo
                   document?: string;
                   counts?: Record<string, number>;
                   skipped_duplicates?: number;
-                  team?: { document_kind: string | null; agents: Record<string, { runs: number; ms: number }>; checked: number; rejected_count: number; rejected: { kind: string; text: string; by: string; reason: string }[] };
+                  team?: {
+                    document_kind: string | null;
+                    agents: Record<string, { runs: number; ms: number }>;
+                    checked: number;
+                    rejected_count: number;
+                    rejected: { kind: string; text: string; by: string; reason: string }[];
+                  };
                 };
                 const c = r.counts ?? {};
                 return (
@@ -257,7 +321,12 @@ function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: bo
                       <span className="font-medium text-gray-800 dark:text-white/90">{r.document ?? "Document"}</span>
                       {j.status === "succeeded" ? (
                         <span className="block text-theme-xs text-gray-500 dark:text-gray-400">
-                          {[["requirements", "requirement"], ["questions", "question"], ["conflicts", "conflict"], ["proposals", "change proposal"]]
+                          {[
+                            ["requirements", "requirement"],
+                            ["questions", "question"],
+                            ["conflicts", "conflict"],
+                            ["proposals", "change proposal"],
+                          ]
                             .map(([k, w]) => `${c[k!] ?? 0} ${w}${(c[k!] ?? 0) === 1 ? "" : "s"}`)
                             .join(" · ")}
                           {r.skipped_duplicates ? ` · ${r.skipped_duplicates} duplicate${r.skipped_duplicates === 1 ? "" : "s"} skipped` : ""}
@@ -303,19 +372,29 @@ function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: bo
             <p className="mb-1 font-semibold text-gray-800 dark:text-white/90">{busy ? "Uploading…" : "Drop files here"}</p>
             <p className="mb-4 text-theme-sm text-gray-500 dark:text-gray-400">or choose several at once</p>
             <label className="inline-flex cursor-pointer">
-              <input ref={fileRef} type="file" multiple disabled={busy} aria-label="Choose files to upload" onChange={(e) => upload(e.target.files)} className="peer sr-only" />
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                disabled={busy}
+                aria-label="Choose files to upload"
+                onChange={(e) => upload(e.target.files)}
+                className="peer sr-only"
+              />
               <span className="inline-flex h-10 items-center rounded-lg bg-brand-500 px-4 text-theme-sm font-medium text-white shadow-theme-xs peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-500 hover:bg-brand-600">
                 Browse files
               </span>
             </label>
           </div>
           <p className="mt-3 text-theme-xs text-gray-500 dark:text-gray-400">
-            TXT, Markdown, PDF (text), DOCX, PPTX, CSV, XLSX, JSON, HTML, EML. Other files are preserved and marked unsupported. Images and scanned PDFs need OCR, which is not configured.
+            TXT, Markdown, PDF (text), DOCX, PPTX, CSV, XLSX, JSON, HTML, EML. Other files are preserved and marked unsupported. Images and scanned PDFs need
+            OCR, which is not configured.
           </p>
           {!aiEnabled && (
             <div className="mt-3">
               <Notice tone="warning">
-                AI processing is off: documents are extracted and searchable, but nothing is proposed for review. Turn it on in <A href={`/projects/${pid}?tab=settings`}>Settings</A>.
+                AI processing is off: documents are extracted and searchable, but nothing is proposed for review. Turn it on in{" "}
+                <A href={`/projects/${pid}?tab=settings`}>Settings</A>.
               </Notice>
             </div>
           )}
@@ -330,8 +409,12 @@ function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: bo
         </Card>
         <Card title="Paste text">
           <form onSubmit={submitPaste} className="space-y-4">
-            <Field label="Title">{(id) => <Input id={id} value={paste.title} onChange={(e) => setPaste({ ...paste, title: e.target.value })} required />}</Field>
-            <Field label="Text">{(id) => <Textarea id={id} rows={5} value={paste.text} onChange={(e) => setPaste({ ...paste, text: e.target.value })} required />}</Field>
+            <Field label="Title">
+              {(id) => <Input id={id} value={paste.title} onChange={(e) => setPaste({ ...paste, title: e.target.value })} required />}
+            </Field>
+            <Field label="Text">
+              {(id) => <Textarea id={id} rows={5} value={paste.text} onChange={(e) => setPaste({ ...paste, text: e.target.value })} required />}
+            </Field>
             <Button type="submit">Add as source</Button>
           </form>
         </Card>
@@ -369,7 +452,11 @@ function EntityList({ pid, type, onChanged }: { pid: string; type: string; onCha
   return (
     <Card
       title={TYPE_TITLE[type] ?? type}
-      desc={type === "change_proposal" ? "Changes to existing requirements, proposed by AI extraction from new documents, by developers or by Claude Code. Nothing is applied until you accept it." : "Only items with a valid human approval are treated as approved."}
+      desc={
+        type === "change_proposal"
+          ? "Changes to existing requirements, proposed by AI extraction from new documents, by developers or by Claude Code. Nothing is applied until you accept it."
+          : "Only items with a valid human approval are treated as approved."
+      }
       actions={
         type !== "change_proposal" && (
           <Button variant={creating ? "secondary" : "primary"} onClick={() => setCreating(!creating)}>
@@ -472,7 +559,14 @@ function NewEntity({ pid, type, onCreated }: { pid: string; type: string; onCrea
       await post(`/projects/${pid}/entities`, {
         entity_type: type,
         title,
-        fields: { feature_scopes: scope ? scope.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [] },
+        fields: {
+          feature_scopes: scope
+            ? scope
+                .split(",")
+                .map((s) => s.trim().toLowerCase())
+                .filter(Boolean)
+            : [],
+        },
         sections: { [textKey]: description },
       });
       onCreated();
@@ -483,8 +577,12 @@ function NewEntity({ pid, type, onCreated }: { pid: string; type: string; onCrea
   return (
     <form onSubmit={submit} className="mb-6 space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:p-5 dark:border-gray-800 dark:bg-white/[0.02]">
       <Field label="Title">{(id) => <Input id={id} value={title} onChange={(e) => setTitle(e.target.value)} required minLength={3} />}</Field>
-      <Field label={textKey === "question" ? "Question" : "Description"}>{(id) => <Textarea id={id} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field>
-      <Field label="Feature scopes" hint="Comma-separated, e.g. email-verification">{(id) => <Input id={id} value={scope} onChange={(e) => setScope(e.target.value)} />}</Field>
+      <Field label={textKey === "question" ? "Question" : "Description"}>
+        {(id) => <Textarea id={id} rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />}
+      </Field>
+      <Field label="Feature scopes" hint="Comma-separated, e.g. email-verification">
+        {(id) => <Input id={id} value={scope} onChange={(e) => setScope(e.target.value)} />}
+      </Field>
       <ErrorBanner error={error} />
       <Button type="submit">Create draft</Button>
     </form>
@@ -516,10 +614,15 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         <fieldset className="rounded-xl border border-amber-500 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/15">
           <legend className="px-1 text-theme-sm font-semibold text-gray-800 dark:text-white/90">AI processing</legend>
           <label className="flex cursor-pointer items-start gap-3 text-theme-sm text-gray-700 dark:text-gray-300">
-            <input type="checkbox" checked={ai} onChange={(e) => setAi(e.target.checked)} className="mt-0.5 size-5 shrink-0 cursor-pointer rounded-md accent-brand-500" />
+            <input
+              type="checkbox"
+              checked={ai}
+              onChange={(e) => setAi(e.target.checked)}
+              className="mt-0.5 size-5 shrink-0 cursor-pointer rounded-md accent-brand-500"
+            />
             <span>
-              Allow Jonathon to send this project&apos;s client text to the Antigravity CLI for answers and draft extraction. The CLI forwards it to its configured model provider and
-              keeps transcripts locally. Turning this off stops new AI processing; it cannot recall text already sent.
+              Allow Jonathon to send this project&apos;s client text to the Antigravity CLI for answers and draft extraction. The CLI forwards it to its
+              configured model provider and keeps transcripts locally. Turning this off stops new AI processing; it cannot recall text already sent.
             </span>
           </label>
         </fieldset>
@@ -555,7 +658,17 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 /** What the agent team did for one document: who ran, and what the verifier and code checks removed (with reasons). */
-function TeamSummary({ team }: { team: { document_kind: string | null; agents: Record<string, { runs: number; ms: number }>; checked: number; rejected_count: number; rejected: { kind: string; text: string; by: string; reason: string }[] } }) {
+function TeamSummary({
+  team,
+}: {
+  team: {
+    document_kind: string | null;
+    agents: Record<string, { runs: number; ms: number }>;
+    checked: number;
+    rejected_count: number;
+    rejected: { kind: string; text: string; by: string; reason: string }[];
+  };
+}) {
   const agents = Object.entries(team.agents).filter(([k]) => AGENT_NAMES[k]);
   return (
     <span className="mt-1.5 block text-theme-xs text-gray-500 dark:text-gray-400">

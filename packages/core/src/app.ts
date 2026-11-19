@@ -12,7 +12,9 @@ import { AuthService } from "./security/auth";
 import type { Principal } from "./security/principal";
 import { AnswerService } from "./services/answering";
 import { type Ctx, requireProject } from "./services/context";
+import { DocumentService, queueDocsRefresh } from "./services/documents";
 import { ExtractionService } from "./services/extraction";
+import { GraphService } from "./services/graph";
 import { KnowledgeService } from "./services/knowledge";
 import { OpsService } from "./services/ops";
 import { ProjectService } from "./services/projects";
@@ -28,8 +30,14 @@ export interface JonathonApp {
   knowledge: KnowledgeService;
   answers: AnswerService;
   extraction: ExtractionService;
+  graph: GraphService;
+  documents: DocumentService;
   ops: OpsService;
-  search(principal: Principal, projectId: string, body: { query: string; entity_types?: SearchableType[]; status?: string[]; limit?: number }): {
+  search(
+    principal: Principal,
+    projectId: string,
+    body: { query: string; entity_types?: SearchableType[]; status?: string[]; limit?: number },
+  ): {
     project_id: string;
     knowledge_revision: number;
     hits: ReturnType<typeof searchProject>;
@@ -72,6 +80,10 @@ export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRun
   const knowledge = new KnowledgeService(ctx);
   const answers = new AnswerService(ctx);
   const extraction = new ExtractionService(ctx);
+  const graph = new GraphService(ctx);
+  const documents = new DocumentService(ctx, graph);
+  // Any committed knowledge change (drafting, review, edits, deletion) refreshes the generated documents, debounced.
+  store.onChanged = (projectId) => queueDocsRefresh(ctx, projectId, "knowledge changed");
   const ops = new OpsService(ctx, sources);
 
   const app: JonathonApp = {
@@ -82,11 +94,17 @@ export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRun
     knowledge,
     answers,
     extraction,
+    graph,
+    documents,
     ops,
     search(principal, projectId, body) {
       const p = requireProject(ctx, principal, projectId, "read");
       const hits = searchProject(db, projectId, body.query, { types: body.entity_types, statuses: body.status, limit: body.limit ?? 10 });
-      return { project_id: projectId, knowledge_revision: p.knowledge_revision, hits: hits.map(({ text: _text, ...h }) => h) as ReturnType<typeof searchProject> };
+      return {
+        project_id: projectId,
+        knowledge_revision: p.knowledge_revision,
+        hits: hits.map(({ text: _text, ...h }) => h) as ReturnType<typeof searchProject>,
+      };
     },
     getJob(principal, projectId, jobId) {
       requireProject(ctx, principal, projectId, "read");
@@ -105,6 +123,8 @@ export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRun
         answer: (jc) => answers.runAnswerJob(jc),
         extract_knowledge: (jc) => extraction.runExtractKnowledgeJob(jc),
         reindex: (jc) => ops.runReindexJob(jc),
+        graph_extract: (jc) => graph.runGraphExtractJob(jc),
+        generate_documents: (jc) => documents.runGenerateJob(jc),
       };
     },
     startWorker(concurrency = config.workerConcurrency) {

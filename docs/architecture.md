@@ -112,6 +112,72 @@ Team agents run in parallel up to `AGY_MAX_CONCURRENT` (default 4) `agy` process
 slot. All team roles use the extraction effort (`AGY_EXTRACTION_EFFORT`, default `low`). Demo mode and
 `JONATHON_AGENT_TEAM=false` use the earlier single-agent drafting and unverified answers.
 
+### Project memory graph (`services/graph.ts`)
+
+Every project has a graph that connects everything Jonathon holds about it:
+
+| Node | From |
+|---|---|
+| client document, passage | sources and their extracted chunks (current revisions only) |
+| requirement, decision, open question, conflict, change proposal | knowledge entities |
+| concept (actor, feature, system, external system, data entity, technology, business term, environment, metric, organization, workflow, regulation) | the `jonathon-graph` agent, one `graph_extract` job per uploaded revision |
+| generated document | `documents/<doc_type>.json` |
+
+| Link | Confidence | How it is found |
+|---|---|---|
+| document contains passage; knowledge cites passage; knowledge → knowledge (depends on, about, resolves, changes, references) | EXTRACTED | recorded structure |
+| passage / knowledge **mentions** concept | EXTRACTED | code: the concept's name or an alias appears in the text (word-bounded, case and punctuation ignored) |
+| concept → concept (uses, integrates with, stores, hosted on, authenticates with ...) | INFERRED | the agent labels it; kept only when its quote is found word for word in a passage it cites and both ends are known concepts |
+| generated document built from passage / knowledge / concept | EXTRACTED | the document's citations |
+
+The agent's concepts are kept only when their name (or an alias) is in a passage they cite; everything else is listed
+with its reason in the job result. Concepts are merged across documents by normalized name and alias. Extractions are
+stored per revision under `graph/extractions/<revision>.json`; the graph itself is computed from those files and the
+database and cached per project state. When a document is removed, its passages, its extraction and every concept and
+relation that only it supported disappear. Communities come from deterministic label propagation.
+
+The graph is also written to `graph/graph.json` in graphify's node-link format (`nodes` with `id`, `label`,
+`file_type`, `source_file`, `community`; `links` with `source`, `target`, `relation`, `confidence`,
+`confidence_score`, `source_file`). graphify's offline commands (`query`, `path`, `explain`, `affected`, `god-nodes`,
+`export html|obsidian|wiki|graphml`) can read it with `--graph <file>`. Jonathon does not run graphify's own
+`extract`: that would send client content to a second model provider with separate keys, outside Jonathon's
+review and audit.
+
+### Generated technical documents (`services/documents.ts`, `docs/catalogue.ts`)
+
+The catalogue has 66 document types in 10 categories (requirements, architecture, backend, frontend, database,
+integrations, security, DevOps, engineering standards, testing); 25 are marked must-have. Each type lists its
+sections, the search topics that find its client passages and the concept kinds it needs. A section is either:
+
+* **compiled** by code from knowledge and the graph (requirement lists by type, acceptance criteria, stated NFR numbers,
+  decisions, open questions and conflicts relevant to the document, concept tables with a verbatim sentence from the
+  client material, document inventory, traceability matrix). No model; always in sync.
+* **written** by `jonathon-doc-writer`, which returns typed blocks: *fact* (must cite E evidence or knowledge IDs),
+  *proposal* (engineering recommendation, never presented as a client requirement), *gap* (a question the material
+  does not answer) and *diagram* (Mermaid). Then:
+  1. Code gate: unknown citations are dropped; a fact without a valid citation, or with numbers not in what it cites,
+     is removed; diagrams must be Mermaid. Facts whose wording is in the cited evidence are `client_stated`.
+  2. `jonathon-doc-verifier` checks restated facts (F) and proposals (P). Unsupported items are removed with the
+     reason; a fact the verifier did not rule on is downgraded to an AI proposal (fail closed).
+
+Every block carries its basis (`client_stated`, `evidence_based`, `knowledge`, `ai_proposed`, `gap`,
+`human_authored`) and its references. Storage: `documents/<doc_type>.json` (authoritative), a Markdown rendering
+next to it, and `documents/history/<doc_type>/r<n>.json` for every revision. The `generated_documents` table is a
+projection, re-imported from the files when missing.
+
+**Keeping documents current.** Written sections store a fingerprint of their inputs (the passages chosen for the
+document with content hashes, the knowledge items with semantic hashes, the concepts, the section spec and the prompt
+version). A `generate_documents` job in refresh mode is queued (debounced 45 s, coalesced into one job with the
+reasons) after a knowledge change, a concept mapping or a source deletion. It waits while ingest, drafting or mapping
+jobs are still running, then recompiles compiled sections and calls the writer only for documents whose fingerprint
+changed. Each revision records why it was made and what it added and removed.
+
+**Human edits.** Editing a section stores the person's Markdown and marks the section `human_edited`. Regeneration
+never replaces it: new content is kept in `pending_update` until the person chooses "use regenerated" or "keep my
+edit". If the Markdown file was edited outside Jonathon, it is copied to history before it is re-rendered. Approval
+needs the human session and the phrase `approve <doc_type>`, is refused while a section has a pending update, and is
+valid only for the exact revision and content hash (`approval_events`, entity type `document`).
+
 ### Review (accept / edit / reject / delete)
 
 The project's **Review** tab lists every item still waiting for a human: draft or in-review requirements and decisions,

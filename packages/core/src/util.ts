@@ -87,13 +87,7 @@ export function parseJson<T = unknown>(s: string | null | undefined, fallback: T
 
 /** Collapse whitespace and lowercase for tolerant excerpt matching. */
 export function normalizeForMatch(s: string): string {
-  return s
-    .normalize("NFKC")
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  return s.normalize("NFKC").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 /**
@@ -101,7 +95,7 @@ export function normalizeForMatch(s: string): string {
  * (models add a trailing period to table-cell text, drop quotes, or change "(x)" to "x"), while digits, %, $, /, + and
  * hyphens are kept. Padded with spaces so matching is word-bounded ("under 3" never matches "under 30%").
  */
-function looseNormalize(s: string): string {
+export function looseNormalize(s: string): string {
   return ` ${normalizeForMatch(s)
     .replace(/[–—]/g, "-")
     .replace(/[.,;:!?"'`()[\]{}…|*_]+/g, " ")

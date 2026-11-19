@@ -38,7 +38,14 @@ export function createMcpServer(app: JonathonApp, principal: McpPrincipal, corre
         const err = toAppError(e);
         app.auth.logMcpAccess(principal.tokenId, tool, projectId, "error", err.code, correlationId);
         if (err.code === "INTERNAL") app.ctx.log.error({ err: err.message, tool, correlation_id: correlationId }, "mcp tool failed");
-        const safe = { error: { code: err.code, message: err.code === "INTERNAL" ? "internal error" : err.message, correlation_id: correlationId, details: err.code === "INTERNAL" ? undefined : err.details } };
+        const safe = {
+          error: {
+            code: err.code,
+            message: err.code === "INTERNAL" ? "internal error" : err.message,
+            correlation_id: correlationId,
+            details: err.code === "INTERNAL" ? undefined : err.details,
+          },
+        };
         return { content: [{ type: "text" as const, text: JSON.stringify(safe) }], isError: true };
       }
     };
@@ -46,7 +53,11 @@ export function createMcpServer(app: JonathonApp, principal: McpPrincipal, corre
   server.registerTool(
     "list_projects",
     { description: "List the Jonathon projects this credential can access.", inputSchema: z.object({}), annotations: { readOnlyHint: true } },
-    wrap("list_projects", () => ({ projects: app.projects.list(principal).map((p) => ({ id: p.id, name: p.name, description: p.description, knowledge_revision: p.knowledge_revision, is_demo: p.is_demo })) })),
+    wrap("list_projects", () => ({
+      projects: app.projects
+        .list(principal)
+        .map((p) => ({ id: p.id, name: p.name, description: p.description, knowledge_revision: p.knowledge_revision, is_demo: p.is_demo })),
+    })),
   );
 
   server.registerTool(
@@ -65,8 +76,10 @@ export function createMcpServer(app: JonathonApp, principal: McpPrincipal, corre
         request_id: z.string().min(8).max(100).optional().describe("Idempotency key: retries with the same request_id return the same turn."),
       }),
     },
-    wrap("ask_jonathon", async (a: { project_id: string; message: string; conversation_id?: string; feature_scope?: string; knowledge_revision?: number; request_id?: string }) =>
-      app.answers.ask(principal, a.project_id, a, { waitMs: app.ctx.config.askWaitMs, correlationId }),
+    wrap(
+      "ask_jonathon",
+      async (a: { project_id: string; message: string; conversation_id?: string; feature_scope?: string; knowledge_revision?: number; request_id?: string }) =>
+        app.answers.ask(principal, a.project_id, a, { waitMs: app.ctx.config.askWaitMs, correlationId }),
     ),
   );
 
@@ -83,8 +96,10 @@ export function createMcpServer(app: JonathonApp, principal: McpPrincipal, corre
       }),
       annotations: { readOnlyHint: true },
     },
-    wrap("search_knowledge", (a: { project_id: string; query: string; entity_types?: z.infer<typeof SearchableTypeSchema>[]; status?: string[]; limit?: number }) =>
-      app.search(principal, a.project_id, { query: a.query, entity_types: a.entity_types, status: a.status, limit: a.limit ?? 10 }),
+    wrap(
+      "search_knowledge",
+      (a: { project_id: string; query: string; entity_types?: z.infer<typeof SearchableTypeSchema>[]; status?: string[]; limit?: number }) =>
+        app.search(principal, a.project_id, { query: a.query, entity_types: a.entity_types, status: a.status, limit: a.limit ?? 10 }),
     ),
   );
 
@@ -145,10 +160,84 @@ export function createMcpServer(app: JonathonApp, principal: McpPrincipal, corre
         request_id: z.string().min(8).max(100),
       }),
     },
-    wrap("propose_requirement_change", (a: { project_id: string; requirement_id: string; base_revision: number; proposed_change: string; rationale: string; request_id: string }) => {
-      const r = app.knowledge.proposeChange(principal, { ...a, requirement_id: a.requirement_id.toUpperCase() });
-      return { proposal_id: r.proposal.human_id, status: r.proposal.status, idempotent_replay: r.idempotent_replay, note: "Recorded for review by Parth. Not applied." };
+    wrap(
+      "propose_requirement_change",
+      (a: { project_id: string; requirement_id: string; base_revision: number; proposed_change: string; rationale: string; request_id: string }) => {
+        const r = app.knowledge.proposeChange(principal, { ...a, requirement_id: a.requirement_id.toUpperCase() });
+        return {
+          proposal_id: r.proposal.human_id,
+          status: r.proposal.status,
+          idempotent_replay: r.idempotent_replay,
+          note: "Recorded for review by Parth. Not applied.",
+        };
+      },
+    ),
+  );
+
+  server.registerTool(
+    "list_documents",
+    {
+      description:
+        "List the technical documents Jonathon can generate for a project (SRS, HLD, ADRs, API contract, test strategy ...) and which are generated, " +
+        "with their revision and approval state.",
+      inputSchema: z.object({ project_id: ProjectId }),
+      annotations: { readOnlyHint: true },
+    },
+    wrap("list_documents", (a: { project_id: string }) => {
+      const c = app.documents.catalogue(principal, a.project_id);
+      return {
+        documents: c.documents.map((d) => ({
+          id: d.id,
+          title: d.title,
+          category: d.category,
+          generated: d.generated,
+          revision: d.revision,
+          approved: d.approved,
+          counts: d.counts,
+        })),
+      };
     }),
+  );
+
+  server.registerTool(
+    "get_document",
+    {
+      description:
+        "Get one generated technical document as Markdown. Every item carries its basis: client-stated, from client material, Jonathon knowledge " +
+        "(with review status), AI proposal (not stated by the client) or gap. Only 'approved' documents were accepted by a person.",
+      inputSchema: z.object({ project_id: ProjectId, doc_type: z.string().min(2).max(60) }),
+      annotations: { readOnlyHint: true },
+    },
+    wrap("get_document", (a: { project_id: string; doc_type: string }) => {
+      const d = app.documents.get(principal, a.project_id, a.doc_type);
+      return { doc_type: a.doc_type, title: d.spec.title, revision: d.document?.revision ?? null, approved: d.approval !== null, markdown: d.markdown };
+    }),
+  );
+
+  server.registerTool(
+    "search_memory_graph",
+    {
+      description:
+        "Search the project memory graph: concepts (roles, systems, integrations, data objects, technologies, terms), requirements and other knowledge, " +
+        "client documents and passages. Returns node ids for explore_memory_graph.",
+      inputSchema: z.object({ project_id: ProjectId, query: z.string().min(1).max(200), limit: z.number().int().min(1).max(50).default(15) }),
+      annotations: { readOnlyHint: true },
+    },
+    wrap("search_memory_graph", (a: { project_id: string; query: string; limit?: number }) => ({
+      nodes: app.graph.search(principal, a.project_id, a.query, a.limit ?? 15),
+    })),
+  );
+
+  server.registerTool(
+    "explore_memory_graph",
+    {
+      description:
+        "Show what one memory-graph node connects to: the passages that mention it, the requirements and questions about it, related concepts " +
+        "(with the verbatim quote behind each AI-labelled relation) and the documents built from it.",
+      inputSchema: z.object({ project_id: ProjectId, node_id: z.string().min(3).max(200) }),
+      annotations: { readOnlyHint: true },
+    },
+    wrap("explore_memory_graph", (a: { project_id: string; node_id: string }) => app.graph.node(principal, a.project_id, a.node_id)),
   );
 
   void EntityTypeSchema;

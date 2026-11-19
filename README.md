@@ -11,6 +11,12 @@ storage, permissions, conversations and approvals.
   stays off). When it is on, every uploaded document is drafted into proposed requirements, descriptions, open questions, conflicts and
   change proposals that you approve, edit, reject or delete in the project's **Review** tab. The relevant client text goes to the
   Antigravity CLI and on to its model provider. Jonathon orchestrates locally; it does not run a model locally.
+* **Tech docs**: 66 pre-development technical documents in 10 categories (SRS, user stories, NFRs, RBAC, HLD, C4, ADRs, API
+  contract, data model, threat model, CI/CD, test strategy ...) generated from the project's material and knowledge. Every
+  item is labelled client-stated, from client material, knowledge, AI proposal or gap. Documents update themselves when
+  material is added or removed, never overwrite a section you edited, and are approved per revision.
+* **Memory graph**: every document, passage, requirement, question, conflict, concept and generated document of a project
+  in one graph, also written as graphify-compatible `graph/graph.json` for the graphify CLI.
 
 ## Requirements
 

@@ -10,6 +10,7 @@ import { safeExtension, sanitizeDisplayName } from "../storage/paths";
 import type { SourceMetadata } from "../storage/project-files";
 import { AppError, newId, nowIso, parseJson, sha256 } from "../util";
 import { type Ctx, requireProject } from "./context";
+import { queueDocsRefresh } from "./documents";
 
 interface RevRow {
   id: string;
@@ -264,6 +265,9 @@ export class SourceService {
       });
     });
     this.ctx.files.deleteSourceFiles(projectId, sourceId);
+    for (const r of revs) this.ctx.files.deleteGraphExtraction(projectId, r.id);
+    // Generated documents built on this source are rebuilt without it (debounced).
+    queueDocsRefresh(this.ctx, projectId, `removed ${src.display_name}`);
     return { removed_revisions: revs.length };
   }
 
@@ -328,15 +332,35 @@ export class SourceService {
         serialKey: `extract:${rev.project_id}`,
         maxAttempts: 2,
       }).id;
+      // Map the document's concepts into the project memory graph (one mapping run per project at a time).
+      this.ctx.queue.enqueue({
+        projectId: rev.project_id,
+        type: "graph_extract",
+        payload: { revision_id: rev.id },
+        createdBy: "system:worker",
+        idempotencyKey: `graph:${rev.id}`,
+        serialKey: `graph:${rev.project_id}`,
+        maxAttempts: 2,
+      });
     }
     const jobStatus = outcome.status === "succeeded" ? "succeeded" : outcome.status;
     return {
       status: jobStatus as JobOutcome["status"],
-      result: { revision_id: rev.id, extraction_status: outcome.status, chunks: outcome.chunks.length, warnings: outcome.warnings, interpretation_job_id: interpretationJob },
+      result: {
+        revision_id: rev.id,
+        extraction_status: outcome.status,
+        chunks: outcome.chunks.length,
+        warnings: outcome.warnings,
+        interpretation_job_id: interpretationJob,
+      },
     };
   }
 
-  indexRevision(rev: { id: string; project_id: string; source_id: string }, title: string, chunks: { ordinal: number; heading: string | null; locator: Record<string, string | number>; text: string }[]): void {
+  indexRevision(
+    rev: { id: string; project_id: string; source_id: string },
+    title: string,
+    chunks: { ordinal: number; heading: string | null; locator: Record<string, string | number>; text: string }[],
+  ): void {
     deleteChunksForRevision(this.ctx.db, rev.project_id, rev.id);
     for (const c of chunks) {
       insertChunk(this.ctx.db, {

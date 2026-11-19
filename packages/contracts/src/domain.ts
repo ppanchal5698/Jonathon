@@ -2,8 +2,7 @@ import { z } from "zod";
 
 // ---------- identifiers ----------
 // Opaque IDs: <prefix>_<26 lowercase base32 chars>. Human IDs (REQ-001) are separate and stable per project.
-const opaque = (prefix: string) =>
-  z.string().regex(new RegExp(`^${prefix}_[0-9a-z]{26}$`), `expected ${prefix}_ id`);
+const opaque = (prefix: string) => z.string().regex(new RegExp(`^${prefix}_[0-9a-z]{26}$`), `expected ${prefix}_ id`);
 
 export const ProjectIdSchema = opaque("prj");
 export const SourceIdSchema = opaque("src");
@@ -28,14 +27,7 @@ export const ProjectSchema = z.object({
 export type Project = z.infer<typeof ProjectSchema>;
 
 // ---------- sources ----------
-export const EXTRACTION_STATUSES = [
-  "pending",
-  "succeeded",
-  "partially_succeeded",
-  "failed",
-  "unsupported",
-  "needs_ocr",
-] as const;
+export const EXTRACTION_STATUSES = ["pending", "succeeded", "partially_succeeded", "failed", "unsupported", "needs_ocr"] as const;
 export const ExtractionStatusSchema = z.enum(EXTRACTION_STATUSES);
 export type ExtractionStatus = z.infer<typeof ExtractionStatusSchema>;
 
@@ -81,29 +73,12 @@ export const ChunkViewSchema = z.object({
 });
 
 // ---------- jobs ----------
-export const JOB_STATUSES = [
-  "queued",
-  "running",
-  "retrying",
-  "succeeded",
-  "partially_succeeded",
-  "failed",
-  "cancelled",
-  "unsupported",
-  "needs_ocr",
-] as const;
+export const JOB_STATUSES = ["queued", "running", "retrying", "succeeded", "partially_succeeded", "failed", "cancelled", "unsupported", "needs_ocr"] as const;
 export const JobStatusSchema = z.enum(JOB_STATUSES);
 export type JobStatus = z.infer<typeof JobStatusSchema>;
-export const TERMINAL_JOB_STATUSES: readonly JobStatus[] = [
-  "succeeded",
-  "partially_succeeded",
-  "failed",
-  "cancelled",
-  "unsupported",
-  "needs_ocr",
-];
+export const TERMINAL_JOB_STATUSES: readonly JobStatus[] = ["succeeded", "partially_succeeded", "failed", "cancelled", "unsupported", "needs_ocr"];
 
-export const JOB_TYPES = ["ingest", "answer", "extract_knowledge", "reindex", "reconcile"] as const;
+export const JOB_TYPES = ["ingest", "answer", "extract_knowledge", "reindex", "reconcile", "graph_extract", "generate_documents"] as const;
 export const JobTypeSchema = z.enum(JOB_TYPES);
 export type JobType = z.infer<typeof JobTypeSchema>;
 

@@ -5,8 +5,11 @@ import {
   ModelChangesSchema,
   ModelClassificationSchema,
   ModelConflictsSchema,
+  ModelDocVerificationSchema,
+  ModelDocWriterSchema,
   ModelDraftVerificationSchema,
   ModelExtractionSchema,
+  ModelGraphExtractionSchema,
   ModelQuestionsSchema,
   ModelRequirementsSchema,
   ModelTurnSchema,
@@ -161,16 +164,89 @@ export const ANSWER_VERIFIER_SYSTEM_PROMPT = role(
 - Judge only from the evidence shown. Do not use outside knowledge.`,
 );
 
+export const GRAPH_SYSTEM_PROMPT = role(
+  "knowledge-graph extractor",
+  "name the concepts the evidence talks about (people and roles, features, systems, external systems, data objects, technologies, business terms, environments, metrics, organizations, workflows, regulations) and the relations between them that the evidence states.",
+  `- Use the exact name the evidence uses for a concept. Put other spellings or abbreviations the evidence uses in aliases.
+- When a concept already exists in <known_concepts>, reuse that exact name.
+- Each concept cites the E ids where it appears. Describe it in one sentence using the evidence's own words.
+- A relation needs a quote copied word for word from one cited E block that states it. No quote, no relation.
+- Both ends of every relation must be concepts you list (or concepts in <known_concepts>), spelled exactly the same way.
+- Cover every kind the evidence contains, not only people and technologies: the records and files the system stores, reads or
+  exchanges are data_entity concepts (a price list, an item, an order, a vendor record, an upload file); words the material
+  defines or uses with a specific meaning are business_term concepts. Every row of a glossary or definitions table is a business_term.
+- One concept per thing: put plural, singular and abbreviated forms the evidence uses in aliases instead of new concepts.
+- Before you finish, check that you listed the data objects: anything the evidence says is uploaded, imported, exported,
+  stored, created, looked up, approved or reported on (for example lists, files, records, quotes, orders, items, accounts).
+  Give each of them kind data_entity, even when it is also a business word.
+- Do not add concepts for generic words (system, data, user, information) unless the evidence gives them a specific meaning.
+- Cite only E ids.`,
+);
+
+export const DOC_WRITER_SYSTEM_PROMPT = role(
+  "technical writer",
+  "write the requested sections of one technical document for a software project from the client evidence (E ids), Jonathon's knowledge items (REQ-, DEC-, QUESTION-, CONFLICT- ids) and the concept list supplied in the message.",
+  `- Every block has a kind:
+  fact: something the evidence or a knowledge item states. Cite the ids that state it. Copy wording where you can.
+  proposal: an engineering recommendation the material does not state (a design choice, a standard, a default value). Write it as a recommendation and never as something the client asked for. Cite the facts it builds on, if any.
+  gap: something this section needs that the material does not answer. Write it as a short question.
+  diagram: Mermaid code (flowchart, sequenceDiagram, erDiagram, classDiagram, stateDiagram-v2, C4Context, C4Container, C4Component). Draw only elements named in facts; cite the ids they come from.
+- Numbers, limits, dates, names and roles in a fact must appear in what it cites. A number the client did not give may appear only in a proposal, labelled "proposed default".
+- When sources disagree (see the conflicts list or two different values), do not pick one: write a gap that cites both.
+- Knowledge items marked draft are not yet approved by a person; you may use them as facts, Jonathon labels their status.
+- For a table section, put one row per block in cells, one cell per column, in the column order given. Leave text empty for table rows.
+- Use the section keys exactly as given. Leave a section's blocks empty rather than padding it.`,
+);
+
+export const DOC_VERIFIER_SYSTEM_PROMPT = role(
+  "document verifier",
+  "check every numbered item (F1, F2 ... facts; P1, P2 ... proposals) of a drafted technical document against the evidence and knowledge it cites, and give one verdict per item.",
+  `- A fact is supported when the cited evidence or knowledge states it (wording may differ, meaning must not). It is unsupported when it adds numbers, names, roles, rules or certainty the cited text does not contain, or cites text about something else.
+- A proposal is supported when it is presented as a recommendation and does not contradict the cited facts. It is unsupported when it claims the client asked for it, or contradicts the evidence.
+- Judge only from the text shown. Do not use outside knowledge. Give a short reason for anything unsupported.`,
+);
+
 export const AGENTS = {
-  answer: { name: AGENT_NAME, description: "Tool-free evidence reasoner used by Jonathon. Answers only from evidence supplied in the message.", prompt: AGENT_SYSTEM_PROMPT },
-  extraction: { name: EXTRACTOR_AGENT_NAME, description: "Tool-free draft extractor used by Jonathon. Proposes drafts only from evidence supplied in the message.", prompt: EXTRACTOR_SYSTEM_PROMPT },
+  answer: {
+    name: AGENT_NAME,
+    description: "Tool-free evidence reasoner used by Jonathon. Answers only from evidence supplied in the message.",
+    prompt: AGENT_SYSTEM_PROMPT,
+  },
+  extraction: {
+    name: EXTRACTOR_AGENT_NAME,
+    description: "Tool-free draft extractor used by Jonathon. Proposes drafts only from evidence supplied in the message.",
+    prompt: EXTRACTOR_SYSTEM_PROMPT,
+  },
   classify: { name: "jonathon-classifier", description: "Tool-free document classifier in Jonathon's agent team.", prompt: CLASSIFIER_SYSTEM_PROMPT },
-  requirements: { name: "jonathon-requirements", description: "Tool-free requirements specialist in Jonathon's agent team.", prompt: REQUIREMENTS_SYSTEM_PROMPT },
+  requirements: {
+    name: "jonathon-requirements",
+    description: "Tool-free requirements specialist in Jonathon's agent team.",
+    prompt: REQUIREMENTS_SYSTEM_PROMPT,
+  },
   questions: { name: "jonathon-questions", description: "Tool-free open-questions specialist in Jonathon's agent team.", prompt: QUESTIONS_SYSTEM_PROMPT },
   conflicts: { name: "jonathon-conflicts", description: "Tool-free conflicts specialist in Jonathon's agent team.", prompt: CONFLICTS_SYSTEM_PROMPT },
   changes: { name: "jonathon-changes", description: "Tool-free change-proposal specialist in Jonathon's agent team.", prompt: CHANGES_SYSTEM_PROMPT },
-  verify_draft: { name: "jonathon-draft-verifier", description: "Tool-free verifier that checks drafted knowledge against evidence.", prompt: DRAFT_VERIFIER_SYSTEM_PROMPT },
-  verify_answer: { name: "jonathon-answer-verifier", description: "Tool-free verifier that checks answer claims against evidence.", prompt: ANSWER_VERIFIER_SYSTEM_PROMPT },
+  verify_draft: {
+    name: "jonathon-draft-verifier",
+    description: "Tool-free verifier that checks drafted knowledge against evidence.",
+    prompt: DRAFT_VERIFIER_SYSTEM_PROMPT,
+  },
+  verify_answer: {
+    name: "jonathon-answer-verifier",
+    description: "Tool-free verifier that checks answer claims against evidence.",
+    prompt: ANSWER_VERIFIER_SYSTEM_PROMPT,
+  },
+  graph: { name: "jonathon-graph", description: "Tool-free concept and relation extractor for Jonathon's project memory graph.", prompt: GRAPH_SYSTEM_PROMPT },
+  doc_writer: {
+    name: "jonathon-doc-writer",
+    description: "Tool-free technical writer that drafts document sections from supplied evidence and knowledge.",
+    prompt: DOC_WRITER_SYSTEM_PROMPT,
+  },
+  doc_verifier: {
+    name: "jonathon-doc-verifier",
+    description: "Tool-free verifier that checks drafted document items against evidence.",
+    prompt: DOC_VERIFIER_SYSTEM_PROMPT,
+  },
 } as const;
 
 export function agentFileContent(schema: keyof typeof AGENTS = "answer"): string {
@@ -213,10 +289,24 @@ export const SCHEMAS = {
   changes: ModelChangesSchema,
   verify_draft: ModelDraftVerificationSchema,
   verify_answer: ModelAnswerVerificationSchema,
+  graph: ModelGraphExtractionSchema,
+  doc_writer: ModelDocWriterSchema,
+  doc_verifier: ModelDocVerificationSchema,
 } as const;
 
 /** Every role except the answerer reads client documents at the (faster) extraction effort. */
-export const EXTRACTION_EFFORT_SCHEMAS: ReadonlySet<SchemaName> = new Set(["extraction", "classify", "requirements", "questions", "conflicts", "changes", "verify_draft", "verify_answer"]);
+export const EXTRACTION_EFFORT_SCHEMAS: ReadonlySet<SchemaName> = new Set([
+  "extraction",
+  "classify",
+  "requirements",
+  "questions",
+  "conflicts",
+  "changes",
+  "verify_draft",
+  "verify_answer",
+  "graph",
+  "doc_verifier",
+]);
 export type SchemaName = keyof typeof SCHEMAS;
 
 export function jsonSchemaFor(name: SchemaName): Record<string, unknown> {

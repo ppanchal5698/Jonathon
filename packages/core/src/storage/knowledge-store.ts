@@ -83,6 +83,9 @@ export interface CommitOptions {
  * projection that can be rebuilt. Approval validity is always recomputed from approval_events.
  */
 export class KnowledgeStore {
+  /** Called after every committed knowledge change (used to refresh generated documents). */
+  onChanged: ((projectId: string) => void) | null = null;
+
   constructor(
     readonly db: Db,
     readonly dataDir: string,
@@ -113,13 +116,7 @@ export class KnowledgeStore {
 
   // ---------- reading ----------
   getRow(projectId: string, humanIdOrId: string): EntityRow | undefined {
-    return one<EntityRow>(
-      this.db,
-      "SELECT * FROM knowledge_entities WHERE project_id = ? AND (human_id = ? OR id = ?)",
-      projectId,
-      humanIdOrId,
-      humanIdOrId,
-    );
+    return one<EntityRow>(this.db, "SELECT * FROM knowledge_entities WHERE project_id = ? AND (human_id = ? OR id = ?)", projectId, humanIdOrId, humanIdOrId);
   }
 
   get(projectId: string, humanIdOrId: string): KnowledgeEntity {
@@ -154,11 +151,7 @@ export class KnowledgeStore {
   }
 
   list(projectId: string, filter: { types?: EntityType[]; statuses?: string[] } = {}): KnowledgeEntity[] {
-    const rows = all<EntityRow>(
-      this.db,
-      "SELECT * FROM knowledge_entities WHERE project_id = ? ORDER BY entity_type, human_id",
-      projectId,
-    );
+    const rows = all<EntityRow>(this.db, "SELECT * FROM knowledge_entities WHERE project_id = ? ORDER BY entity_type, human_id", projectId);
     return rows
       .filter((r) => !filter.types || filter.types.includes(r.entity_type))
       .filter((r) => !filter.statuses || filter.statuses.includes(r.status))
@@ -312,10 +305,7 @@ export class KnowledgeStore {
       if (!row || existingText == null) throw new AppError("ENTITY_NOT_FOUND", `${humanId} not found`);
       const fileHash = sha256(existingText);
       if (fileHash !== row.file_hash && fileHash !== opts.acceptExternalFileHash) {
-        throw new AppError(
-          "EXTERNAL_EDIT_PENDING",
-          `${humanId} was changed outside Jonathon. Run reconciliation to import the edit before changing it here.`,
-        );
+        throw new AppError("EXTERNAL_EDIT_PENDING", `${humanId} was changed outside Jonathon. Run reconciliation to import the edit before changing it here.`);
       }
       if (row.revision !== opts.expectedRevision) {
         throw new AppError("REVISION_CONFLICT", `${humanId} is at revision ${row.revision}, not ${opts.expectedRevision}`, {
@@ -343,6 +333,7 @@ export class KnowledgeStore {
     opts.beforeProjection?.(doc);
     this.upsertProjection(doc, fileHash, "ok");
     run(this.db, "UPDATE projects SET knowledge_revision = knowledge_revision + 1, updated_at = ? WHERE id = ?", nowIso(), projectId);
+    this.onChanged?.(projectId);
     audit(this.db, {
       principal: opts.principal,
       projectId,
@@ -392,6 +383,7 @@ export class KnowledgeStore {
       run(this.db, "DELETE FROM knowledge_entities WHERE id = ?", row.id);
       deleteChunksForEntity(this.db, projectId, row.id);
       run(this.db, "UPDATE projects SET knowledge_revision = knowledge_revision + 1, updated_at = ? WHERE id = ?", nowIso(), projectId);
+      this.onChanged?.(projectId);
       audit(this.db, {
         principal: opts.principal,
         projectId,
@@ -486,13 +478,7 @@ export class KnowledgeStore {
     });
   }
 
-  private docToView(
-    doc: EntityDoc,
-    storagePath: string,
-    fileHash: string,
-    fileState: KnowledgeEntity["file_state"],
-    stale: boolean,
-  ): KnowledgeEntity {
+  private docToView(doc: EntityDoc, storagePath: string, fileHash: string, fileState: KnowledgeEntity["file_state"], stale: boolean): KnowledgeEntity {
     const sem = semanticHash(doc);
     const { valid, event } = this.approvalFor(doc, sem);
     void fileHash;
@@ -740,6 +726,7 @@ export class KnowledgeStore {
     writeFileAtomic(path, text);
     this.upsertProjection(doc, fileHash, "ok");
     run(this.db, "UPDATE projects SET knowledge_revision = knowledge_revision + 1, updated_at = ? WHERE id = ?", nowIso(), doc.project_id);
+    this.onChanged?.(doc.project_id);
     audit(this.db, {
       principal,
       projectId: doc.project_id,

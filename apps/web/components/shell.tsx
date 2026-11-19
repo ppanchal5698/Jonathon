@@ -27,6 +27,8 @@ import {
   MenuIcon,
   MoonIcon,
   ProposalIcon,
+  BookIcon,
+  GraphIcon,
   QuestionIcon,
   ScaleIcon,
   SearchIcon,
@@ -52,6 +54,8 @@ export const PROJECT_SECTIONS = [
   ["conflicts", "Conflicts", AlertIcon],
   ["questions", "Open questions", QuestionIcon],
   ["proposals", "Proposals", ProposalIcon],
+  ["techdocs", "Tech docs", BookIcon],
+  ["graph", "Memory graph", GraphIcon],
   ["chat", "Chat", ChatIcon],
   ["settings", "Settings", SettingsIcon],
 ] as const;
@@ -97,7 +101,9 @@ export function Shell({ children }: { children: ReactNode }) {
         Skip to content
       </a>
       <Sidebar showText={showText} expanded={expanded} mobileOpen={mobileOpen} onHover={setHovered} />
-      {mobileOpen && <button type="button" aria-label="Close menu" className="fixed inset-0 z-40 bg-gray-900/50 xl:hidden" onClick={() => setMobileOpen(false)} />}
+      {mobileOpen && (
+        <button type="button" aria-label="Close menu" className="fixed inset-0 z-40 bg-gray-900/50 xl:hidden" onClick={() => setMobileOpen(false)} />
+      )}
       <div className={cx("flex min-w-0 flex-1 flex-col transition-all duration-300 ease-in-out", expanded ? "xl:ml-[290px]" : "xl:ml-[90px]")}>
         <Header
           session={session}
@@ -113,7 +119,10 @@ export function Shell({ children }: { children: ReactNode }) {
           }}
         />
         {session.mode === "demo" && (
-          <div role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-theme-sm font-medium text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-orange-400">
+          <div
+            role="note"
+            className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-theme-sm font-medium text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-orange-400"
+          >
             Demo mode: no AI runtime is connected. Answers are extractive quotes, not Antigravity reasoning.
           </div>
         )}
@@ -227,7 +236,8 @@ function SidebarNav({ showText }: { showText: boolean }) {
                 {isOpen && (
                   <ul className="mt-1 ml-9 flex flex-col gap-0.5">
                     {PROJECT_SECTIONS.map(([key, label]) => {
-                      const active = isCurrent && tab === key && !pathname.includes("/entities/") && !pathname.includes("/sources/");
+                      const active =
+                        isCurrent && tab === key && !pathname.includes("/entities/") && !pathname.includes("/sources/") && !pathname.includes("/docs/");
                       return (
                         <li key={key}>
                           <Link
@@ -268,7 +278,9 @@ function SidebarNav({ showText }: { showText: boolean }) {
 
 /** Sidebar footer card (TailAdmin's widget slot) showing real worker and runtime health. */
 function StatusWidget() {
-  const health = useApi<{ status: string; worker: { alive: boolean }; runtime: { status: string }; jobs: { active: number; failed: number } }>("/ops/health", { pollMs: 15_000 });
+  const health = useApi<{ status: string; worker: { alive: boolean }; runtime: { status: string }; jobs: { active: number; failed: number } }>("/ops/health", {
+    pollMs: 15_000,
+  });
   const h = health.data;
   return (
     <div className="mb-8 mt-auto rounded-2xl bg-gray-50 px-4 py-5 dark:bg-white/[0.03]">
@@ -283,7 +295,9 @@ function StatusWidget() {
           </div>
           <div className="flex items-center justify-between">
             <dt className="text-gray-500 dark:text-gray-400">Runtime</dt>
-            <dd><Badge tone={h.runtime.status === "ok" ? "success" : h.runtime.status === "demo" ? "primary" : "warning"}>{h.runtime.status}</Badge></dd>
+            <dd>
+              <Badge tone={h.runtime.status === "ok" ? "success" : h.runtime.status === "demo" ? "primary" : "warning"}>{h.runtime.status}</Badge>
+            </dd>
           </div>
           <div className="flex items-center justify-between">
             <dt className="text-gray-500 dark:text-gray-400">Jobs</dt>
@@ -293,7 +307,10 @@ function StatusWidget() {
           </div>
         </dl>
       )}
-      <Link href="/operations" className="mt-4 flex h-9 items-center justify-center rounded-lg bg-brand-500 text-theme-sm font-medium text-white hover:bg-brand-600">
+      <Link
+        href="/operations"
+        className="mt-4 flex h-9 items-center justify-center rounded-lg bg-brand-500 text-theme-sm font-medium text-white hover:bg-brand-600"
+      >
         Operations
       </Link>
     </div>
@@ -355,7 +372,14 @@ function UserMenu({ username, onSignOut }: { username: string; onSignOut: () => 
   }, [open]);
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="menu" aria-label={`Account menu for ${username}`} className="flex items-center gap-2 text-gray-700 dark:text-gray-400">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={`Account menu for ${username}`}
+        className="flex items-center gap-2 text-gray-700 dark:text-gray-400"
+      >
         <span className="flex size-10 items-center justify-center rounded-full bg-brand-50 text-theme-sm font-semibold text-brand-500 uppercase lg:size-11 dark:bg-brand-500/15 dark:text-brand-400">
           {username.slice(0, 2)}
         </span>
@@ -363,15 +387,27 @@ function UserMenu({ username, onSignOut }: { username: string; onSignOut: () => 
         <ChevronDownIcon className={cx("size-4 transition-transform", open && "rotate-180")} />
       </button>
       {open && (
-        <div role="menu" className="absolute right-0 mt-3 w-60 rounded-2xl border border-gray-200 bg-white p-3 shadow-theme-lg dark:border-gray-800 dark:bg-gray-900">
+        <div
+          role="menu"
+          className="absolute right-0 mt-3 w-60 rounded-2xl border border-gray-200 bg-white p-3 shadow-theme-lg dark:border-gray-800 dark:bg-gray-900"
+        >
           <div className="border-b border-gray-200 px-2 pb-3 dark:border-gray-800">
             <p className="font-medium text-gray-700 dark:text-gray-300">{username}</p>
             <p className="text-theme-xs text-gray-500 dark:text-gray-400">Local account</p>
           </div>
-          <Link role="menuitem" href="/setup" className="mt-2 flex items-center gap-3 rounded-lg px-2 py-2 text-theme-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5">
+          <Link
+            role="menuitem"
+            href="/setup"
+            className="mt-2 flex items-center gap-3 rounded-lg px-2 py-2 text-theme-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5"
+          >
             <CpuIcon className="size-5" /> Setup & runtime
           </Link>
-          <button role="menuitem" type="button" onClick={onSignOut} className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-theme-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5">
+          <button
+            role="menuitem"
+            type="button"
+            onClick={onSignOut}
+            className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-theme-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5"
+          >
             <LogoutIcon className="size-5" /> Sign out
           </button>
         </div>
@@ -474,14 +510,21 @@ function HeaderSearch() {
         <div className="absolute top-full left-0 z-50 mt-2 w-full overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-theme-lg xl:w-[520px] dark:border-gray-800 dark:bg-gray-900">
           {pid ? (
             busy && hits.length === 0 ? (
-              <div className="p-4"><Loading label="Searching" /></div>
+              <div className="p-4">
+                <Loading label="Searching" />
+              </div>
             ) : hits.length === 0 ? (
               <p className="p-4 text-theme-sm text-gray-500">No matches in this project.</p>
             ) : (
               <ul className="custom-scrollbar max-h-96 overflow-y-auto p-2">
                 {hits.map((h) => (
                   <li key={h.chunk_id}>
-                    <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => go(hrefFor(h))} className="w-full rounded-lg px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-white/5">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => go(hrefFor(h))}
+                      className="w-full rounded-lg px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-white/5"
+                    >
                       <span className="flex items-center gap-2">
                         <Badge tone={h.kind === "evidence" ? "gray" : h.approval_valid ? "success" : "warning"}>
                           {h.kind === "evidence" ? "source" : h.approval_valid ? "approved" : (h.status ?? h.entity_type)}
@@ -500,7 +543,12 @@ function HeaderSearch() {
             <ul className="p-2">
               {projectMatches.map((p) => (
                 <li key={p.id}>
-                  <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => go(`/projects/${p.id}`)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-theme-sm hover:bg-gray-100 dark:hover:bg-white/5">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => go(`/projects/${p.id}`)}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-theme-sm hover:bg-gray-100 dark:hover:bg-white/5"
+                  >
                     <FolderIcon className="size-5 text-gray-500" /> {p.name}
                   </button>
                 </li>

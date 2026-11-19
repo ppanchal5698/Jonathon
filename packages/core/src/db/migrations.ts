@@ -344,4 +344,23 @@ CREATE TABLE integration_health (
 ) STRICT;
 `,
   },
+  {
+    id: "002_generated_documents",
+    sql: `
+-- [PROJECTION] generated technical documents (authoritative files under documents/<doc_type>.json)
+CREATE TABLE generated_documents (
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  doc_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  category TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  counts TEXT NOT NULL DEFAULT '{}',
+  pending_updates INTEGER NOT NULL DEFAULT 0,
+  generated_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, doc_type)
+) STRICT;
+`,
+  },
 ];

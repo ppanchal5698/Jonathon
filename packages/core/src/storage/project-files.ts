@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import type { ExtractionStatus, Locator } from "@jonathon/contracts";
 import YAML from "yaml";
 import { z } from "zod";
@@ -151,10 +151,7 @@ export class ProjectFiles {
   writeExtraction(projectId: string, sourceId: string, doc: LocatorsDoc, markdown: string): void {
     ensureDirInside(this.dataDir, "projects", projectId, "extracted", sourceId);
     writeFileAtomic(resolveInside(this.dataDir, "projects", projectId, "extracted", sourceId, `${doc.revision_id}.md`), markdown);
-    writeFileAtomic(
-      resolveInside(this.dataDir, "projects", projectId, "extracted", sourceId, `${doc.revision_id}.locators.json`),
-      `${JSON.stringify(doc)}\n`,
-    );
+    writeFileAtomic(resolveInside(this.dataDir, "projects", projectId, "extracted", sourceId, `${doc.revision_id}.locators.json`), `${JSON.stringify(doc)}\n`);
   }
 
   readExtraction(projectId: string, sourceId: string, revisionId: string): LocatorsDoc | null {
@@ -185,6 +182,104 @@ export class ProjectFiles {
 
   readSpecSnapshot(projectId: string, snapshotId: string): string | null {
     return readText(resolveInside(this.dataDir, "projects", projectId, "specifications", `${snapshotId}.md`));
+  }
+
+  // ----- memory graph (derived: rebuildable from sources and knowledge) -----
+  writeGraphExtraction(projectId: string, revisionId: string, json: string): void {
+    assertSafeSegment(revisionId);
+    ensureDirInside(this.dataDir, "projects", projectId, "graph", "extractions");
+    writeFileAtomic(resolveInside(this.dataDir, "projects", projectId, "graph", "extractions", `${revisionId}.json`), json);
+  }
+
+  /** Every stored graph extraction as [revision id, file text, mtime]. */
+  listGraphExtractions(projectId: string): { revisionId: string; text: string; mtimeMs: number }[] {
+    const dir = resolveInside(this.dataDir, "projects", projectId, "graph", "extractions");
+    let names: string[];
+    try {
+      names = readdirSync(dir).filter((n) => /^rev_[0-9a-z]{26}\.json$/.test(n));
+    } catch {
+      return [];
+    }
+    const out: { revisionId: string; text: string; mtimeMs: number }[] = [];
+    for (const n of names.sort()) {
+      const p = resolveInside(dir, n);
+      const text = readText(p);
+      if (text != null) out.push({ revisionId: n.slice(0, -5), text, mtimeMs: statSync(p).mtimeMs });
+    }
+    return out;
+  }
+
+  graphExtractionStamp(projectId: string): string {
+    const dir = resolveInside(this.dataDir, "projects", projectId, "graph", "extractions");
+    try {
+      return readdirSync(dir)
+        .sort()
+        .map((n) => `${n}:${statSync(resolveInside(dir, n)).mtimeMs}`)
+        .join(",");
+    } catch {
+      return "";
+    }
+  }
+
+  deleteGraphExtraction(projectId: string, revisionId: string): void {
+    assertSafeSegment(revisionId);
+    rmSync(resolveInside(this.dataDir, "projects", projectId, "graph", "extractions", `${revisionId}.json`), { force: true });
+  }
+
+  /** graph/graph.json in graphify's node-link format, so the graphify CLI can query it. */
+  writeGraphJson(projectId: string, json: string): string {
+    ensureDirInside(this.dataDir, "projects", projectId, "graph");
+    const p = resolveInside(this.dataDir, "projects", projectId, "graph", "graph.json");
+    if (readText(p) !== json) writeFileAtomic(p, json);
+    return p;
+  }
+
+  // ----- generated technical documents -----
+  readDocument(projectId: string, docType: string): string | null {
+    assertSafeSegment(docType);
+    return readText(resolveInside(this.dataDir, "projects", projectId, "documents", `${docType}.json`));
+  }
+
+  readDocumentMarkdown(projectId: string, docType: string): string | null {
+    assertSafeSegment(docType);
+    return readText(resolveInside(this.dataDir, "projects", projectId, "documents", `${docType}.md`));
+  }
+
+  /**
+   * Write the document (JSON, authoritative) and its Markdown rendering. If the Markdown file was edited outside
+   * Jonathon since the last rendering, the edited file is kept in history before it is replaced, never dropped.
+   */
+  writeDocument(
+    projectId: string,
+    docType: string,
+    revision: number,
+    json: string,
+    markdown: string,
+    lastRenderedHash: string,
+  ): { externalEditKept: string | null } {
+    assertSafeSegment(docType);
+    ensureDirInside(this.dataDir, "projects", projectId, "documents", "history", docType);
+    const mdPath = resolveInside(this.dataDir, "projects", projectId, "documents", `${docType}.md`);
+    const current = readText(mdPath);
+    let externalEditKept: string | null = null;
+    if (current != null && lastRenderedHash && sha256(current) !== lastRenderedHash) {
+      externalEditKept = `projects/${projectId}/documents/history/${docType}/external-edit-before-r${revision}-${Date.now()}.md`;
+      writeFileAtomic(resolveInside(this.dataDir, ...externalEditKept.split("/")), current);
+    }
+    writeFileAtomic(resolveInside(this.dataDir, "projects", projectId, "documents", "history", docType, `r${revision}.json`), json);
+    writeFileAtomic(resolveInside(this.dataDir, "projects", projectId, "documents", `${docType}.json`), json);
+    writeFileAtomic(mdPath, markdown);
+    return { externalEditKept };
+  }
+
+  listDocumentTypes(projectId: string): string[] {
+    try {
+      return readdirSync(resolveInside(this.dataDir, "projects", projectId, "documents"))
+        .filter((n) => /^[a-z0-9_]{2,60}\.json$/.test(n))
+        .map((n) => n.slice(0, -5));
+    } catch {
+      return [];
+    }
   }
 }
 

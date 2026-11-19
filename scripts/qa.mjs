@@ -1,11 +1,20 @@
 #!/usr/bin/env node
 // Start a THROWAWAY QA instance (fresh temp data folder, UI :3191, API :4191) for manual or agent testing.
 // Your real data folder and account are never touched. Uses the real agy runtime unless JONATHON_MODE=demo.
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const data = process.env.JONATHON_QA_DATA_DIR ?? mkdtempSync(join(tmpdir(), "jonathon-qa-"));
+// --reuse-last: continue with the most recent QA data folder (keeps earlier test projects, applies new migrations).
+function lastQaFolder() {
+  const dirs = readdirSync(tmpdir())
+    .filter((n) => n.startsWith("jonathon-qa-"))
+    .map((n) => join(tmpdir(), n))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+  return dirs[0];
+}
+const reuse = process.argv.includes("--reuse-last") ? lastQaFolder() : undefined;
+const data = process.env.JONATHON_QA_DATA_DIR ?? reuse ?? mkdtempSync(join(tmpdir(), "jonathon-qa-"));
 Object.assign(process.env, {
   JONATHON_DATA_DIR: data,
   JONATHON_PORT: "4191",

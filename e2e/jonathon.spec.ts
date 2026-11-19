@@ -111,6 +111,35 @@ test("full workflow", async ({ page }) => {
   await page.getByRole("button", { name: "Record approved decision" }).click();
   await expect(page.getByText("resolved").first()).toBeVisible();
 
+  // ---- Generated technical document: generate, read, edit a section, approve ----
+  await page.goto(page.url().replace(/\/projects\/([^/?]+).*/, "/projects/$1?tab=techdocs"));
+  await expect(page.getByText("Technical documentation")).toBeVisible();
+  // The SRS: the e2e documents state requirements, so it has client evidence, compiled requirements and written sections.
+  await page.getByRole("row", { name: /Software Requirements Specification/ }).getByRole("button", { name: "Generate" }).click();
+  await page.getByRole("row", { name: /Software Requirements Specification/ }).getByRole("link", { name: /Software Requirements Specification/ }).click({ timeout: 150_000 });
+  await expect(page.getByRole("heading", { name: "Functional requirements", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: /^REQ-\d+$/ }).first()).toBeVisible();
+  await expect(page.getByText(/^Gap:/).first()).toBeVisible();
+  await expect(page.getByText(/Removed by the checks/)).toBeVisible();
+  const assumptions = page.locator("section").filter({ has: page.getByRole("heading", { name: "Assumptions and dependencies", exact: true }) });
+  await assumptions.getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel("Edit Assumptions and dependencies").fill("The client provides the email service account.");
+  await page.getByRole("button", { name: "Save section" }).click();
+  await expect(page.getByText(/Edited by a person/).first()).toBeVisible();
+  await page.getByRole("button", { name: "Approve" }).click();
+  await page.getByLabel('Type "approve srs" to confirm').fill("approve srs");
+  await page.getByRole("dialog").getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByText(/approved by/).first()).toBeVisible();
+
+  // ---- Memory graph ----
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "E2E portal" }).click();
+  await page.getByRole("tab", { name: "Memory graph" }).click();
+  await expect(page.getByText("Project memory graph")).toBeVisible();
+  await expect(page.getByRole("img", { name: /Graph around/ })).toBeVisible({ timeout: 30_000 });
+  await page.getByLabel("Search the memory graph").fill("REQ");
+  await page.getByRole("button", { name: "Search" }).click();
+  await expect(page.getByRole("button", { name: /REQ-/ }).first()).toBeVisible();
+
   // ---- MCP credential: create (shown once) and revoke ----
   await page.goto("/mcp");
   await page.getByRole("checkbox", { name: "E2E portal" }).check();

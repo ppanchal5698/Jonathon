@@ -7,9 +7,13 @@ import {
   CreateMcpTokenBodySchema,
   CreateProjectBodySchema,
   DeleteSourceBodySchema,
+  DocReviewBodySchema,
+  DocSectionUpdateBodySchema,
+  EditDocSectionBodySchema,
   type EntityType,
   EntityTypeSchema,
   ERROR_HTTP_STATUS,
+  GenerateDocumentsBodySchema,
   LoginBodySchema,
   PasteTextBodySchema,
   ResolveConflictBodySchema,
@@ -69,7 +73,12 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     if (e.code === "INTERNAL") req.log.error({ err: (err as Error).message, stack: (err as Error).stack }, "unhandled error");
     else req.log.info({ code: e.code }, "request failed");
     reply.status(ERROR_HTTP_STATUS[e.code]).send({
-      error: { code: e.code, message: e.code === "INTERNAL" ? "internal error" : e.message, correlation_id: req.id, details: e.code === "INTERNAL" ? undefined : e.details },
+      error: {
+        code: e.code,
+        message: e.code === "INTERNAL" ? "internal error" : e.message,
+        correlation_id: req.id,
+        details: e.code === "INTERNAL" ? undefined : e.details,
+      },
     });
   });
 
@@ -168,9 +177,19 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   });
   f.post<{ Params: P }>("/api/v1/projects/:pid/sources/paste", { preHandler: authed }, async (req) => {
     const b = parse(PasteTextBodySchema, req.body);
-    return ok(app.sources.ingest(req.principal!, req.params.pid, { filename: `${b.title}.md`, bytes: new TextEncoder().encode(b.text), kind: "pasted_text", sourceId: b.source_id, correlationId: req.id }));
+    return ok(
+      app.sources.ingest(req.principal!, req.params.pid, {
+        filename: `${b.title}.md`,
+        bytes: new TextEncoder().encode(b.text),
+        kind: "pasted_text",
+        sourceId: b.source_id,
+        correlationId: req.id,
+      }),
+    );
   });
-  f.get<{ Params: P & { sid: string } }>("/api/v1/projects/:pid/sources/:sid", { preHandler: authed }, async (req) => ok(app.sources.get(req.principal!, req.params.pid, req.params.sid)));
+  f.get<{ Params: P & { sid: string } }>("/api/v1/projects/:pid/sources/:sid", { preHandler: authed }, async (req) =>
+    ok(app.sources.get(req.principal!, req.params.pid, req.params.sid)),
+  );
   f.delete<{ Params: P & { sid: string } }>("/api/v1/projects/:pid/sources/:sid", { preHandler: authed }, async (req) =>
     ok(app.sources.delete(req.principal!, req.params.pid, req.params.sid, parse(DeleteSourceBodySchema, req.body).confirmation)),
   );
@@ -188,7 +207,16 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     const p = requireProject(app.ctx, req.principal!, req.params.pid, "write");
     if (!p.ai_enabled && config.mode !== "demo") throw new AppError("AI_DISABLED", "enable AI processing for this project first");
     app.sources.revision(p.id, req.params.rid);
-    return ok(app.ctx.queue.enqueue({ projectId: p.id, type: "extract_knowledge", payload: { revision_id: req.params.rid }, serialKey: `extract:${p.id}`, createdBy: req.principal!.kind === "user" ? req.principal!.username : "user", correlationId: req.id }));
+    return ok(
+      app.ctx.queue.enqueue({
+        projectId: p.id,
+        type: "extract_knowledge",
+        payload: { revision_id: req.params.rid },
+        serialKey: `extract:${p.id}`,
+        createdBy: req.principal!.kind === "user" ? req.principal!.username : "user",
+        correlationId: req.id,
+      }),
+    );
   });
 
   // ----- knowledge -----
@@ -212,7 +240,14 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     ok(app.knowledge.transition(req.principal!, req.params.pid, req.params.hid, parse(TransitionBodySchema, req.body))),
   );
   f.post<{ Params: P & { hid: string } }>("/api/v1/projects/:pid/entities/:hid/accept-proposed", { preHandler: authed }, async (req) =>
-    ok(app.knowledge.acceptProposedStatements(req.principal!, req.params.pid, req.params.hid, parse(z.object({ expected_revision: z.number().int().positive() }), req.body).expected_revision)),
+    ok(
+      app.knowledge.acceptProposedStatements(
+        req.principal!,
+        req.params.pid,
+        req.params.hid,
+        parse(z.object({ expected_revision: z.number().int().positive() }), req.body).expected_revision,
+      ),
+    ),
   );
   // Human review of AI-proposed items (UI only: MCP tokens and the worker are rejected by assertHuman).
   f.post<{ Params: P & { hid: string } }>("/api/v1/projects/:pid/entities/:hid/accept", { preHandler: authed }, async (req) =>
@@ -227,8 +262,10 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   f.get<{ Params: P & { hid: string } }>("/api/v1/projects/:pid/entities/:hid/history", { preHandler: authed }, async (req) =>
     ok(app.knowledge.history(req.principal!, req.params.pid, req.params.hid)),
   );
-  f.get<{ Params: P & { hid: string }; Querystring: { from: string; to: string } }>("/api/v1/projects/:pid/entities/:hid/diff", { preHandler: authed }, async (req) =>
-    ok(app.knowledge.diff(req.principal!, req.params.pid, req.params.hid, Number(req.query.from), Number(req.query.to))),
+  f.get<{ Params: P & { hid: string }; Querystring: { from: string; to: string } }>(
+    "/api/v1/projects/:pid/entities/:hid/diff",
+    { preHandler: authed },
+    async (req) => ok(app.knowledge.diff(req.principal!, req.params.pid, req.params.hid, Number(req.query.from), Number(req.query.to))),
   );
   f.post<{ Params: P & { hid: string } }>("/api/v1/projects/:pid/conflicts/:hid/resolve", { preHandler: authed }, async (req) =>
     ok(app.knowledge.resolveConflict(req.principal!, req.params.pid, req.params.hid, parse(ResolveConflictBodySchema, req.body))),
@@ -239,6 +276,72 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   f.get<{ Params: P; Querystring: { feature: string; approved_only?: string } }>("/api/v1/projects/:pid/spec", { preHandler: authed }, async (req) =>
     ok(app.knowledge.featureSpec(req.principal!, req.params.pid, String(req.query.feature ?? ""), { approvedOnly: req.query.approved_only !== "false" })),
   );
+  // ----- generated technical documents -----
+  type D = P & { doc: string };
+  const download = (reply: FastifyReply, filename: string, text: string, type = "text/markdown; charset=utf-8") => {
+    reply.header("Content-Type", type);
+    reply.header("Content-Disposition", `attachment; filename="${filename.replace(/[^\w.\- ]/g, "_")}"`);
+    return reply.send(text);
+  };
+  f.get<{ Params: P }>("/api/v1/projects/:pid/documents", { preHandler: authed }, async (req) => ok(app.documents.catalogue(req.principal!, req.params.pid)));
+  f.post<{ Params: P }>("/api/v1/projects/:pid/documents/generate", { preHandler: authed }, async (req) =>
+    ok(app.documents.queueGenerate(req.principal!, req.params.pid, parse(GenerateDocumentsBodySchema, req.body).doc_types)),
+  );
+  f.get<{ Params: P }>("/api/v1/projects/:pid/documents-export", { preHandler: authed }, async (req, reply) => {
+    const b = app.documents.bundle(req.principal!, req.params.pid);
+    return download(reply, b.filename, b.text);
+  });
+  f.get<{ Params: D }>("/api/v1/projects/:pid/documents/:doc", { preHandler: authed }, async (req) =>
+    ok(app.documents.get(req.principal!, req.params.pid, req.params.doc)),
+  );
+  f.get<{ Params: D }>("/api/v1/projects/:pid/documents/:doc/markdown", { preHandler: authed }, async (req, reply) => {
+    const m = app.documents.markdown(req.principal!, req.params.pid, req.params.doc);
+    return download(reply, m.filename, m.text);
+  });
+  f.put<{ Params: D & { key: string } }>("/api/v1/projects/:pid/documents/:doc/sections/:key", { preHandler: authed }, async (req) =>
+    ok(app.documents.editSection(req.principal!, req.params.pid, req.params.doc, req.params.key, parse(EditDocSectionBodySchema, req.body))),
+  );
+  f.post<{ Params: D & { key: string } }>("/api/v1/projects/:pid/documents/:doc/sections/:key/update", { preHandler: authed }, async (req) =>
+    ok(app.documents.resolveSectionUpdate(req.principal!, req.params.pid, req.params.doc, req.params.key, parse(DocSectionUpdateBodySchema, req.body))),
+  );
+  f.post<{ Params: D }>("/api/v1/projects/:pid/documents/:doc/approve", { preHandler: authed }, async (req) =>
+    ok(app.documents.approve(req.principal!, req.params.pid, req.params.doc, parse(DocReviewBodySchema, req.body))),
+  );
+
+  // ----- project memory graph -----
+  const nodeId = z.string().min(3).max(200);
+  f.get<{ Params: P }>("/api/v1/projects/:pid/graph", { preHandler: authed }, async (req) => ok(app.graph.overview(req.principal!, req.params.pid)));
+  f.get<{ Params: P; Querystring: { q?: string; limit?: string } }>("/api/v1/projects/:pid/graph/search", { preHandler: authed }, async (req) =>
+    ok(app.graph.search(req.principal!, req.params.pid, parse(z.string().max(200), req.query.q ?? ""), Number(req.query.limit ?? 20))),
+  );
+  f.get<{ Params: P; Querystring: { id?: string } }>("/api/v1/projects/:pid/graph/node", { preHandler: authed }, async (req) =>
+    ok(app.graph.node(req.principal!, req.params.pid, parse(nodeId, req.query.id))),
+  );
+  f.get<{ Params: P; Querystring: { id?: string; depth?: string; limit?: string } }>(
+    "/api/v1/projects/:pid/graph/neighborhood",
+    { preHandler: authed },
+    async (req) =>
+      ok(
+        app.graph.neighborhood(
+          req.principal!,
+          req.params.pid,
+          parse(nodeId, req.query.id),
+          parse(z.coerce.number().int().min(1).max(3).default(1), req.query.depth),
+          parse(z.coerce.number().int().min(10).max(400).default(120), req.query.limit),
+        ),
+      ),
+  );
+  f.get<{ Params: P; Querystring: { from?: string; to?: string } }>("/api/v1/projects/:pid/graph/path", { preHandler: authed }, async (req) =>
+    ok(app.graph.path(req.principal!, req.params.pid, parse(nodeId, req.query.from), parse(nodeId, req.query.to))),
+  );
+  f.get<{ Params: P }>("/api/v1/projects/:pid/graph/export", { preHandler: authed }, async (req, reply) => {
+    requireProject(app.ctx, req.principal!, req.params.pid, "read");
+    return download(reply, "graph.json", `${JSON.stringify(app.graph.graphifyJson(req.params.pid), null, 1)}\n`, "application/json; charset=utf-8");
+  });
+  f.post<{ Params: P }>("/api/v1/projects/:pid/graph/map", { preHandler: authed }, async (req) =>
+    ok(app.graph.queueExtraction(req.principal!, req.params.pid, parse(z.object({ force: z.boolean().default(false) }), req.body ?? {}).force)),
+  );
+
   f.get("/api/v1/approvals/pending", { preHandler: authed }, async (req) => ok(app.knowledge.pending(req.principal!)));
   f.post<{ Params: P }>("/api/v1/projects/:pid/search", { preHandler: authed }, async (req) => {
     const b = parse(SearchBodySchema, req.body);
@@ -246,7 +349,9 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   });
 
   // ----- conversations -----
-  f.get<{ Params: P }>("/api/v1/projects/:pid/conversations", { preHandler: authed }, async (req) => ok(app.answers.listConversations(req.principal!, req.params.pid)));
+  f.get<{ Params: P }>("/api/v1/projects/:pid/conversations", { preHandler: authed }, async (req) =>
+    ok(app.answers.listConversations(req.principal!, req.params.pid)),
+  );
   f.get<{ Params: P & { cid: string } }>("/api/v1/projects/:pid/conversations/:cid", { preHandler: authed }, async (req) =>
     ok(app.answers.messages(req.principal!, req.params.pid, req.params.cid)),
   );
@@ -303,7 +408,9 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
 
   // ----- operations -----
   f.get("/api/v1/ops/health", { preHandler: authed }, async () => ok(app.ops.health()));
-  f.get<{ Querystring: { auth?: string } }>("/api/v1/ops/runtime", { preHandler: authed }, async (req) => ok(await app.ops.runtimeDiagnostics(req.query.auth === "1")));
+  f.get<{ Querystring: { auth?: string } }>("/api/v1/ops/runtime", { preHandler: authed }, async (req) =>
+    ok(await app.ops.runtimeDiagnostics(req.query.auth === "1")),
+  );
   f.post<{ Body: { project_id?: string } }>("/api/v1/ops/reconcile", { preHandler: authed }, async (req) =>
     ok(app.ops.reconcile(req.principal!, (req.body as { project_id?: string } | undefined)?.project_id)),
   );
@@ -331,8 +438,18 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     await transport.handleRequest(req.raw, reply.raw, req.body);
   };
   f.post("/mcp", mcpHandler);
-  f.get("/mcp", async (_req, reply) => reply.status(405).header("Allow", "POST").send({ error: { code: "VALIDATION_FAILED", message: "stateless server: use POST" } }));
-  f.delete("/mcp", async (_req, reply) => reply.status(405).header("Allow", "POST").send({ error: { code: "VALIDATION_FAILED", message: "stateless server: no sessions to delete" } }));
+  f.get("/mcp", async (_req, reply) =>
+    reply
+      .status(405)
+      .header("Allow", "POST")
+      .send({ error: { code: "VALIDATION_FAILED", message: "stateless server: use POST" } }),
+  );
+  f.delete("/mcp", async (_req, reply) =>
+    reply
+      .status(405)
+      .header("Allow", "POST")
+      .send({ error: { code: "VALIDATION_FAILED", message: "stateless server: no sessions to delete" } }),
+  );
 
   return f;
 }

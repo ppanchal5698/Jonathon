@@ -73,6 +73,8 @@ export class JobQueue {
     serialKey?: string | null;
     maxAttempts?: number;
     correlationId?: string | null;
+    /** Earliest time the job may run (ISO). Defaults to now. */
+    runAfter?: string;
   }): Job {
     return tx(this.db, () => {
       if (input.idempotencyKey) {
@@ -95,7 +97,7 @@ export class JobQueue {
         input.type,
         JSON.stringify(input.payload),
         input.maxAttempts ?? 3,
-        now,
+        input.runAfter ?? now,
         input.idempotencyKey ?? null,
         input.serialKey ?? null,
         input.createdBy,
@@ -335,12 +337,7 @@ export class JobQueue {
           now,
           r.id,
         );
-        run(
-          this.db,
-          "UPDATE job_attempts SET finished_at = ?, outcome = 'lease_expired' WHERE job_id = ? AND finished_at IS NULL",
-          now,
-          r.id,
-        );
+        run(this.db, "UPDATE job_attempts SET finished_at = ?, outcome = 'lease_expired' WHERE job_id = ? AND finished_at IS NULL", now, r.id);
       }
       return rows.length;
     });

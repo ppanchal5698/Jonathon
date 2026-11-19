@@ -4,7 +4,18 @@ type P = SVGProps<SVGSVGElement>;
 
 function Base({ children, ...p }: P & { children: React.ReactNode }) {
   return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...p}>
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...p}
+    >
       {children}
     </svg>
   );
@@ -189,3 +200,18 @@ export function LogoMark({ className = "size-8" }: { className?: string }) {
     </svg>
   );
 }
+export const BookIcon = (p: P) => (
+  <Base {...p}>
+    <path d="M4.5 5.5a2 2 0 0 1 2-2h12v14h-12a2 2 0 0 0-2 2z" />
+    <path d="M4.5 19.5a2 2 0 0 0 2 1h12v-3.5M8.5 7.5h6M8.5 10.5h4" />
+  </Base>
+);
+export const GraphIcon = (p: P) => (
+  <Base {...p}>
+    <circle cx="6" cy="6" r="2.2" />
+    <circle cx="18" cy="7" r="2.2" />
+    <circle cx="12" cy="17.5" r="2.4" />
+    <circle cx="19" cy="17" r="1.6" />
+    <path d="M8 6.6l7.8.3M7.1 7.9l3.8 7.6M16.9 8.9l-3.7 6.6M14.4 17.4h3" />
+  </Base>
+);

@@ -43,8 +43,10 @@ Legend: **Live-verified** = exercised against the real `agy` 1.5.9 or a real MCP
 | Automatic drafting on upload: requirements, linked open questions, conflicts (incl. against existing requirements), change proposals for existing requirements, near-duplicate skipping | fixture-tested + **live-verified** in the browser | `review.test.ts`; QA run below |
 | Review actions: approve-in-one-step, accept question/conflict, accept-and-apply proposal (content-changed check), reject/dismiss/withdraw, delete with tombstone and no ID reuse | fixture-tested + browser e2e | `review.test.ts`, `e2e/jonathon.spec.ts` |
 | Durable jobs: leases, retries with backoff, cancel, retry, restart recovery, per-conversation serialization | fixture-tested | services "durable operation" |
-| MCP Streamable HTTP, 7 tools, scopes, idempotency, pending-job polling, revocation, access log | fixture-tested with a **real MCP SDK client** | server tests |
+| MCP Streamable HTTP, 11 tools (4 read-only document and memory-graph tools added), scopes, idempotency, pending-job polling, revocation, access log | fixture-tested with a **real MCP SDK client** | server tests |
 | Next.js UI: setup, dashboard, projects, review queue, documents (per-document AI draft summary), extraction preview, structured editor, approvals, conflicts, questions, proposals, diff, chat with evidence drawer, MCP, operations | built + browser e2e | `e2e/jonathon.spec.ts` |
+| Project memory graph: structural graph, concept mapping (`jonathon-graph`) with name and quote gates, mentions by code, removal on source deletion, communities, search / neighbourhood / path, graphify-format `graph.json` | fixture-tested + **live-verified** (8 real documents) + read by graphify 0.9.53 CLI | `documents.test.ts`; journal 19 Nov |
+| Generated technical documents: 66-type catalogue, compiled sections, writer + code gate + verifier, basis labels, debounced refresh on add/remove/knowledge change, human-edit protection, external Markdown edit kept, per-revision approval | fixture-tested + e2e (generate, edit, approve) + **live-verified** (25 must-haves on 8 real documents) | `documents.test.ts`, `e2e/jonathon.spec.ts`; journal 19 Nov |
 | `pnpm run doctor`, `seed:demo`, `db:migrate`, `runtime-probe` | built | run manually |
 | Backup (VACUUM INTO + projects copy) | fixture-tested | services "backups" |
 | OCR for images and scanned PDFs | **not done**: Tesseract not installed; files are marked `needs_ocr` | |
@@ -189,3 +191,24 @@ and the `claude mcp add` syntax is from the docs, but no Claude Code session was
   claim removed by the answer verifier. Still open: the question specialist raises many logistics questions from
   dependency lists ("When will X provide Y?"), and paraphrased duplicates that differ by a number are kept.
   Tests: 90 unit/integration, e2e and 4 live pass.
+* **19 Nov 2026, 2:12 PM IST**: technical documents and the project memory graph (docs/architecture.md, "Project memory
+  graph" and "Generated technical documents"). A 66-document catalogue in 10 categories (25 must-haves); compiled
+  sections from knowledge and the graph, written sections from a technical-writer agent behind a code gate and a
+  document verifier; every item labelled by basis; debounced refresh when material is added or removed or knowledge
+  changes, only for documents whose inputs changed; human-edited sections never overwritten (regenerated content waits);
+  per-revision approval. The graph links documents, passages, knowledge, concepts and generated documents; concepts and
+  AI-labelled relations need their name / a verbatim quote in a cited passage; written to `graph/graph.json` in
+  graphify's format. Live run on the same 8-document corpus (QA copy, real agy 1.5.9): 8 of 8 documents mapped, 557
+  nodes, about 2,000 links, 99 concepts merged across documents; graphify 0.9.53 read the file (`god-nodes`, `explain`,
+  `path --undirected`, `query`). Fixes from the run: relations are now checked against all concepts of the document
+  (the estimate went from 16 rejected items to 7); the graph prompt now asks for data objects and glossary terms (the
+  requirements documents went from 42 to 78 concepts, including glossary terms and data objects). All 25 must-have
+  documents generated; the first run had 11 writer timeouts at 240 s with 4 in parallel, so the writer now gets 600 s;
+  open items per document were cut from about 50 to 1–17 (two topic words required); prompt-internal evidence ids
+  ("(E3, E4)") are stripped from document text. Spot checks: the authentication design raises the open choice between
+  two identity providers as a gap citing the recorded conflict and states the sign-in details from the setup guide
+  correctly; the tech stack flags the two competing stacks; the data dictionary keeps the client's field limits,
+  surcharges and multipliers verbatim and marks every data type as proposed. Still open: the verifier sometimes removes
+  legitimate engineering proposals (Redis cache, CI rows) as "not in the evidence"; one concept community dominates
+  (label propagation on a hub-heavy graph); the other 41 documents were not generated live. Tests: 99 unit/integration,
+  e2e (generate, edit, approve a document; memory graph search) pass.
