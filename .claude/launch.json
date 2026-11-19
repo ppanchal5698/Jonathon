@@ -7,7 +7,7 @@
       "runtimeArgs": [
         "dev"
       ],
-      "port": 3000
+      "port": 3005
     },
     {
       "name": "jonathon-qa",
