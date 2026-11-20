@@ -112,6 +112,14 @@ and the `claude mcp add` syntax is from the docs, but no Claude Code session was
 * **8:00 PM**: `pnpm doctor` turned out to be a pnpm 12 built-in, so the project check is `pnpm run doctor`. Removed a
   shell-spawned version check. Final: 66 unit/integration, 4 live, 1 e2e, lint, typecheck and build all pass.
 
+* **20 Nov 2026, 1:40–3:00 PM IST**: Docker Compose deployment (demo mode) and queue/storage hardening; audit in
+  [deployment-audit.md](deployment-audit.md), guide in [docker.md](docker.md). Added: lease-fenced commits, owner-checked
+  `fail`/`complete`, jittered exponential backoff, per-job deadlines, admission limit, dead letters + audited replay,
+  business dedupe keys, HTTP Idempotency-Key, import-root allowlist, data-marker guard, verified backup/restore with manifest.
+  Results: 129 tests pass (27 new); fresh-volume Compose stack passes 27/27 smoke checks; restore into a new volume
+  preserved all records; SQLite on a Docker Desktop bind mount starved a concurrent writer (8 vs 20,949 commits), so
+  the default is a Docker volume. Live AI in containers is blocked (agy keyring sign-in, unverified Linux build).
+
 ## Next concrete steps
 
 1. Parth: connect a real Claude Code session (docs/claude-code.md) and confirm `list_projects` and `get_feature_spec`.
@@ -212,3 +220,10 @@ and the `claude mcp add` syntax is from the docs, but no Claude Code session was
   legitimate engineering proposals (Redis cache, CI rows) as "not in the evidence"; one concept community dominates
   (label propagation on a hub-heavy graph); the other 41 documents were not generated live. Tests: 99 unit/integration,
   e2e (generate, edit, approve a document; memory graph search) pass.
+* **19 Nov 2026, 3:53 PM IST**: folder import (docs/architecture.md, "Folder import"). The Documents tab takes an absolute folder path,
+  scans it (new / changed / unchanged / duplicate / skipped with reasons, grouped by sub-folder, nothing read into
+  Jonathon), lets the person untick sub-folders or files, and imports the rest in an `import_folder` background job
+  through the normal upload path. Re-importing adds only new files and new revisions of changed ones. Human session
+  only; links and junctions are never followed; Jonathon's data root and source repository are refused. Real scan of a
+  client folder with code and a knowledge base: 945 importable documents (739 MB) in about 15 s, 339 skipped (tooling
+  folders, unsupported types). Tests: 102 unit/integration pass (3 new).

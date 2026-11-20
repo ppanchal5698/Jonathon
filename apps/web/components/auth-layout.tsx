@@ -8,8 +8,8 @@ import { useTheme } from "./theme";
 export function AuthLayout({ title, subtitle, children, wide = false }: { title: string; subtitle?: ReactNode; children: ReactNode; wide?: boolean }) {
   const { resolved, toggle } = useTheme();
   return (
-    <div className="relative min-h-screen bg-white dark:bg-gray-900">
-      <div className="flex min-h-screen flex-col lg:flex-row">
+    <div className="relative min-h-dvh bg-white dark:bg-gray-900">
+      <div className="flex min-h-dvh flex-col lg:flex-row">
         <main className="flex flex-1 flex-col justify-center px-6 py-10 sm:px-10">
           <div className={wide ? "mx-auto w-full max-w-2xl" : "mx-auto w-full max-w-md"}>
             <div className="mb-8 flex items-center gap-2.5 lg:hidden">
@@ -27,9 +27,7 @@ export function AuthLayout({ title, subtitle, children, wide = false }: { title:
           <div className="relative z-10 flex max-w-xs flex-col items-center text-center">
             <LogoMark className="mb-4 size-14" />
             <p className="text-2xl font-semibold text-white">Jonathon</p>
-            <p className="mt-3 text-gray-400">
-              Client evidence in, approved requirements out. Local-first knowledge for you and for Claude Code.
-            </p>
+            <p className="mt-3 text-gray-400">Client evidence in, approved requirements out. Local-first knowledge for you and for Claude Code.</p>
           </div>
         </aside>
       </div>
@@ -37,9 +35,9 @@ export function AuthLayout({ title, subtitle, children, wide = false }: { title:
         type="button"
         onClick={toggle}
         aria-label={resolved === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-        className="fixed right-6 bottom-6 z-50 flex size-14 items-center justify-center rounded-full bg-brand-500 text-white transition-colors hover:bg-brand-600"
+        className="fixed top-4 right-4 z-50 flex size-11 items-center justify-center rounded-full bg-brand-500 text-white shadow-theme-md transition-colors hover:bg-brand-600 lg:top-6 lg:right-6"
       >
-        {resolved === "dark" ? <SunIcon className="size-6" /> : <MoonIcon className="size-6" />}
+        {resolved === "dark" ? <SunIcon className="size-5" /> : <MoonIcon className="size-5" />}
       </button>
     </div>
   );

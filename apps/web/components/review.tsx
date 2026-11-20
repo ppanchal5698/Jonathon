@@ -7,11 +7,23 @@
  */
 import { ENTITY_SPECS, type KnowledgeEntity, type Statement } from "@jonathon/contracts";
 import Link from "next/link";
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, type SVGProps, useEffect, useId, useRef, useState } from "react";
 import { type ApiError, api, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
-import { AlertIcon, CheckCircleIcon, ChecklistIcon, CloseIcon, InboxIcon, PencilIcon, ProposalIcon, QuestionIcon, SparkleIcon, TrashIcon, XCircleIcon } from "./icons";
-import { A, Badge, Button, cx, Empty, ErrorBanner, Field, Input, Loading, Textarea } from "./ui";
+import {
+  AlertIcon,
+  CheckCircleIcon,
+  ChecklistIcon,
+  CloseIcon,
+  InboxIcon,
+  PencilIcon,
+  ProposalIcon,
+  QuestionIcon,
+  SparkleIcon,
+  TrashIcon,
+  XCircleIcon,
+} from "./icons";
+import { A, Badge, Button, buttonClass, CardSkeleton, Checkbox, cx, Empty, ErrorBanner, Field, Input, Pagination, Skeleton, Textarea, usePaged } from "./ui";
 
 type Ent = KnowledgeEntity;
 
@@ -39,7 +51,9 @@ export function needsReview(e: Ent): boolean {
 }
 
 function statements(e: Ent): Statement[] {
-  return Object.values(e.sections).flatMap((v) => (Array.isArray(v) ? (v as unknown[]).filter((s): s is Statement => typeof s === "object" && s !== null) : []));
+  return Object.values(e.sections).flatMap((v) =>
+    Array.isArray(v) ? (v as unknown[]).filter((s): s is Statement => typeof s === "object" && s !== null) : [],
+  );
 }
 
 /** "[behavior · client-stated] text" → parts (see ENTITY_SPECS.change_proposal). */
@@ -50,8 +64,23 @@ export function parseAddition(line: string): { section: string; basis: string; t
 
 // ---------------------------------------------------------------- modal
 
-export function Modal({ open, onClose, title, children, footer, tone = "default" }: { open: boolean; onClose: () => void; title: string; children: ReactNode; footer: ReactNode; tone?: "default" | "danger" }) {
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  tone = "default",
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  footer: ReactNode;
+  tone?: "default" | "danger";
+}) {
   const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
@@ -61,6 +90,20 @@ export function Modal({ open, onClose, title, children, footer, tone = "default"
     (ref.current?.querySelector<HTMLElement>("[data-autofocus]") ?? ref.current?.querySelector<HTMLElement>("button"))?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") closeRef.current();
+      // Keep Tab inside the dialog (aria-modal alone does not stop keyboard focus reaching the page behind).
+      if (e.key === "Tab" && ref.current) {
+        const items = [...ref.current.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select, a[href]")];
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (!first || !last) return;
+        if (e.shiftKey && (document.activeElement === first || !ref.current.contains(document.activeElement))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && (document.activeElement === last || !ref.current.contains(document.activeElement))) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
@@ -74,14 +117,30 @@ export function Modal({ open, onClose, title, children, footer, tone = "default"
   return (
     <div className="fixed inset-0 z-[99999] flex items-center justify-center overflow-y-auto p-4">
       <div className="fixed inset-0 bg-gray-400/50 backdrop-blur-[32px] dark:bg-black/60" onClick={onClose} aria-hidden="true" />
-      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby="modal-title" className="relative w-full max-w-lg rounded-3xl bg-white p-6 shadow-theme-xl sm:p-8 dark:bg-gray-900">
-        <button type="button" onClick={onClose} aria-label="Close" className="absolute top-4 right-4 flex size-10 items-center justify-center rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700 dark:hover:text-white">
+      <div
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-6 shadow-theme-xl sm:p-8 dark:bg-gray-900"
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-4 right-4 flex size-10 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+        >
           <CloseIcon className="size-5" />
         </button>
-        <div className={cx("mb-4 flex size-12 items-center justify-center rounded-full", tone === "danger" ? "bg-red-50 text-red-500 dark:bg-red-500/15" : "bg-brand-50 text-brand-500 dark:bg-brand-500/15")}>
+        <div
+          className={cx(
+            "mb-4 flex size-12 items-center justify-center rounded-full",
+            tone === "danger" ? "bg-red-50 text-red-500 dark:bg-red-500/15" : "bg-brand-50 text-brand-500 dark:bg-brand-500/15",
+          )}
+        >
           {tone === "danger" ? <AlertIcon className="size-6" /> : <CheckCircleIcon className="size-6" />}
         </div>
-        <h2 id="modal-title" className="mb-2 pr-10 text-xl font-semibold text-gray-800 dark:text-white/90">
+        <h2 id={titleId} className="mb-2 pr-10 text-xl font-semibold [overflow-wrap:anywhere] text-gray-800 dark:text-white/90">
           {title}
         </h2>
         <div className="text-theme-sm text-gray-600 dark:text-gray-300">{children}</div>
@@ -108,9 +167,14 @@ function actionCopy(e: Ent, a: Action): { title: string; button: string; body: R
       body: (
         <>
           <p>
-            {id} will be removed from the knowledge base, search and Claude Code. Its earlier revisions stay in the project&apos;s history folder for audit, and the ID will not be reused.
+            {id} will be removed from the knowledge base, search and Claude Code. Its earlier revisions stay in the project&apos;s history folder for audit, and
+            the ID will not be reused.
           </p>
-          {e.approval_valid && <p className="mt-2 font-medium text-red-600 dark:text-red-400">It is currently approved. Answers and specifications that relied on it will be marked stale.</p>}
+          {e.approval_valid && (
+            <p className="mt-2 font-medium text-red-600 dark:text-red-400">
+              It is currently approved. Answers and specifications that relied on it will be marked stale.
+            </p>
+          )}
           <p className="mt-2">This cannot be undone in Jonathon. To keep a record instead, use Reject.</p>
         </>
       ),
@@ -125,7 +189,8 @@ function actionCopy(e: Ent, a: Action): { title: string; button: string; body: R
       danger: true,
       body: (
         <p>
-          {id} stays in the knowledge base with status <strong>{{ reject: "rejected", dismiss: "dismissed", withdraw: "withdrawn" }[verb]}</strong>, so you can see later that it was considered and turned down.
+          {id} stays in the knowledge base with status <strong>{{ reject: "rejected", dismiss: "dismissed", withdraw: "withdrawn" }[verb]}</strong>, so you can
+          see later that it was considered and turned down.
           {e.entity_type === "change_proposal" && " The requirement is not changed."}
         </p>
       ),
@@ -140,15 +205,14 @@ function actionCopy(e: Ent, a: Action): { title: string; button: string; body: R
         danger: false,
         body: (
           <>
-            <p>
-              Approval is recorded under your name for revision {e.revision} and this exact content. Any later edit sends it back to review.
-            </p>
+            <p>Approval is recorded under your name for revision {e.revision} and this exact content. Any later edit sends it back to review.</p>
             {proposed > 0 && (
               <p className="mt-2">
                 This also marks {proposed} AI-proposed statement{proposed === 1 ? "" : "s"} as reviewed
                 {inferred > 0 ? (
                   <>
-                    , including <strong className="text-gray-800 dark:text-white/90">{inferred} the client did not state</strong> (AI-inferred). Edit or remove those first if they are not right.
+                    , including <strong className="text-gray-800 dark:text-white/90">{inferred} the client did not state</strong> (AI-inferred). Edit or remove
+                    those first if they are not right.
                   </>
                 ) : (
                   "."
@@ -166,7 +230,8 @@ function actionCopy(e: Ent, a: Action): { title: string; button: string; body: R
         danger: false,
         body: structured ? (
           <p>
-            The proposed changes are applied to <span className="font-mono">{String(e.fields.requirement_id)}</span> as a new revision. If that requirement was approved, it goes back to review and needs a new approval.
+            The proposed changes are applied to <span className="font-mono">{String(e.fields.requirement_id)}</span> as a new revision. If that requirement was
+            approved, it goes back to review and needs a new approval.
           </p>
         ) : (
           <p>The proposal is marked accepted. Its text is free-form, so edit {String(e.fields.requirement_id)} yourself to reflect it.</p>
@@ -180,7 +245,8 @@ function actionCopy(e: Ent, a: Action): { title: string; button: string; body: R
         danger: false,
         body: (
           <p>
-            Confirms this {e.entity_type === "conflict" ? "conflict is real" : "question needs an answer"}. It stays open until you {e.entity_type === "conflict" ? "resolve it with a decision" : "record the answer"}.
+            Confirms this {e.entity_type === "conflict" ? "conflict is real" : "question needs an answer"}. It stays open until you{" "}
+            {e.entity_type === "conflict" ? "resolve it with a decision" : "record the answer"}.
           </p>
         ),
       };
@@ -245,9 +311,24 @@ export function useReviewAction(pid: string, onDone: (a: Action, e: Ent) => void
 
 /** Accept / Edit / Reject / Delete buttons for one item. */
 /** onEdit: undefined → link to the entity editor; null → hide Edit (already editing). */
-export function ReviewButtons({ pid, ent, onAsk, onEdit, size = "md" }: { pid: string; ent: Ent; onAsk: (a: Action, e: Ent) => void; onEdit?: (() => void) | null; size?: "sm" | "md" }) {
+export function ReviewButtons({
+  pid,
+  ent,
+  onAsk,
+  onEdit,
+  size = "md",
+}: {
+  pid: string;
+  ent: Ent;
+  onAsk: (a: Action, e: Ent) => void;
+  onEdit?: (() => void) | null;
+  size?: "sm" | "md";
+}) {
   const open = needsReview(ent);
-  const editable = onEdit !== null && ent.entity_type !== "change_proposal" && !["superseded", "rejected", "resolved", "accepted", "answered", "dismissed", "withdrawn"].includes(ent.status);
+  const editable =
+    onEdit !== null &&
+    ent.entity_type !== "change_proposal" &&
+    !["superseded", "rejected", "resolved", "accepted", "answered", "dismissed", "withdrawn"].includes(ent.status);
   const verbs = reviewVerbs(ent.entity_type);
   const acceptLabel = verbs.accept === "approve" ? "Approve" : ent.entity_type === "change_proposal" ? "Accept" : "Accept";
   const rejectLabel = { reject: "Reject", dismiss: "Dismiss", withdraw: "Withdraw" }[verbs.reject] ?? "Reject";
@@ -266,14 +347,7 @@ export function ReviewButtons({ pid, ent, onAsk, onEdit, size = "md" }: { pid: s
             Edit
           </Button>
         ) : (
-          <Link
-            href={`/projects/${pid}/entities/${ent.human_id}?edit=1`}
-            aria-label={`Edit ${ent.human_id}`}
-            className={cx(
-              "inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-white font-medium whitespace-nowrap text-gray-700 shadow-theme-xs ring-1 ring-gray-300 ring-inset hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-white/[0.06] [&_svg]:size-4",
-              size === "sm" ? "h-8 px-3 text-theme-xs" : "h-10 px-4 text-theme-sm",
-            )}
-          >
+          <Link href={`/projects/${pid}/entities/${ent.human_id}?edit=1`} aria-label={`Edit ${ent.human_id}`} className={buttonClass("secondary", size)}>
             <PencilIcon />
             Edit
           </Link>
@@ -284,7 +358,7 @@ export function ReviewButtons({ pid, ent, onAsk, onEdit, size = "md" }: { pid: s
           {rejectLabel}
         </Button>
       )}
-      <Button size={size} variant="ghost" className="text-red-500 hover:bg-red-50 hover:text-red-600 dark:text-red-400 dark:hover:bg-red-500/15" onClick={() => onAsk("delete", ent)} aria-label={`Delete ${ent.human_id}`}>
+      <Button size={size} variant="danger-ghost" onClick={() => onAsk("delete", ent)} aria-label={`Delete ${ent.human_id}`}>
         <TrashIcon />
         Delete
       </Button>
@@ -306,23 +380,49 @@ export function ReviewQueue({ pid, onChanged }: { pid: string; onChanged?: () =>
   const [filter, setFilter] = useState<string>("all");
   const [done, setDone] = useState<string | null>(null);
   const { ask, modal } = useReviewAction(pid, (action, ent) => {
-    const word = action === "delete" ? "deleted" : action === "reject" ? { reject: "rejected", dismiss: "dismissed", withdraw: "withdrawn" }[reviewVerbs(ent.entity_type).reject] : reviewVerbs(ent.entity_type).accept === "approve" ? "approved" : "accepted";
+    const word =
+      action === "delete"
+        ? "deleted"
+        : action === "reject"
+          ? { reject: "rejected", dismiss: "dismissed", withdraw: "withdrawn" }[reviewVerbs(ent.entity_type).reject]
+          : reviewVerbs(ent.entity_type).accept === "approve"
+            ? "approved"
+            : "accepted";
     setDone(`${ent.human_id} ${word}.`);
     void list.reload();
     onChanged?.();
   });
   if (list.error) return <ErrorBanner error={list.error} />;
-  if (!list.data) return <Loading />;
+  if (!list.data)
+    return (
+      <div className="space-y-4 md:space-y-6">
+        <Skeleton className="h-11 w-full max-w-xl rounded-xl" />
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {[0, 1, 2, 3].map((i) => (
+            <CardSkeleton key={i} lines={4} label="review items" />
+          ))}
+        </div>
+      </div>
+    );
   const items = list.data.filter(needsReview);
   const all = list.data;
   const reqById = new Map(all.filter((e) => e.entity_type === "requirement").map((e) => [e.human_id, e]));
-  const groups = GROUPS.map(([type, label, Icon]) => ({ type, label, Icon, items: items.filter((e) => e.entity_type === type || (type === "requirement" && e.entity_type === "decision")) }));
+  const groups = GROUPS.map(([type, label, Icon]) => ({
+    type,
+    label,
+    Icon,
+    items: items.filter((e) => e.entity_type === type || (type === "requirement" && e.entity_type === "decision")),
+  }));
   const shown = groups.filter((g) => filter === "all" || g.type === filter);
   return (
     <div className="space-y-4 md:space-y-6">
       {modal}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div role="group" aria-label="Filter review items" className="no-scrollbar flex gap-0.5 overflow-x-auto rounded-xl bg-gray-100 p-1 dark:bg-white/[0.04]">
+        <div
+          role="group"
+          aria-label="Filter review items"
+          className="no-scrollbar flex gap-0.5 overflow-x-auto rounded-xl bg-gray-100 p-1 dark:bg-white/[0.04]"
+        >
           {[["all", "All", items.length] as const, ...groups.map((g) => [g.type, g.label, g.items.length] as const)].map(([key, label, n]) => (
             <button
               key={key}
@@ -331,18 +431,32 @@ export function ReviewQueue({ pid, onChanged }: { pid: string; onChanged?: () =>
               onClick={() => setFilter(key)}
               className={cx(
                 "flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-theme-sm font-medium transition-colors",
-                filter === key ? "bg-white text-gray-900 shadow-theme-xs dark:bg-white/[0.08] dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200",
+                filter === key
+                  ? "bg-white text-gray-900 shadow-theme-xs dark:bg-white/[0.08] dark:text-white"
+                  : "text-gray-600 hover:bg-white/60 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-white/[0.04] dark:hover:text-gray-200",
               )}
             >
               {label}
-              <span className={cx("rounded-full px-2 py-0.5 text-theme-xs", n ? "bg-brand-50 text-brand-500 dark:bg-brand-500/15 dark:text-brand-400" : "bg-gray-200 text-gray-500 dark:bg-white/5 dark:text-gray-400")}>{n}</span>
+              <span
+                className={cx(
+                  "rounded-full px-2 py-0.5 text-theme-xs tabular-nums",
+                  n ? "bg-brand-50 text-brand-600 dark:bg-brand-500/15 dark:text-brand-300" : "bg-gray-200 text-gray-600 dark:bg-white/5 dark:text-gray-400",
+                )}
+              >
+                {n}
+              </span>
             </button>
           ))}
         </div>
-        <p className="text-theme-sm text-gray-500 dark:text-gray-400">Jonathon drafts these from your documents. Nothing counts as approved until you approve it.</p>
+        <p className="text-theme-sm text-gray-500 dark:text-gray-400">
+          Jonathon drafts these from your documents. Nothing counts as approved until you approve it.
+        </p>
       </div>
       {done && (
-        <p role="status" className="rounded-xl border border-green-500 bg-green-50 px-4 py-3 text-theme-sm text-gray-700 dark:border-green-500/30 dark:bg-green-500/15 dark:text-gray-300">
+        <p
+          role="status"
+          className="rounded-xl border border-green-500 bg-green-50 px-4 py-3 text-theme-sm text-gray-700 dark:border-green-500/30 dark:bg-green-500/15 dark:text-gray-300"
+        >
           {done}
         </p>
       )}
@@ -351,25 +465,45 @@ export function ReviewQueue({ pid, onChanged }: { pid: string; onChanged?: () =>
           When you upload documents with AI processing on, Jonathon proposes requirements, open questions, conflicts and changes to existing requirements here.
         </Empty>
       ) : (
-        shown.map(
-          (g) =>
-            g.items.length > 0 && (
-              <section key={g.type} aria-labelledby={`grp-${g.type}`}>
-                <h2 id={`grp-${g.type}`} className="mb-3 flex items-center gap-2 text-base font-medium text-gray-800 dark:text-white/90">
-                  <g.Icon className="size-5 text-gray-500 dark:text-gray-400" />
-                  {g.label}
-                  <span className="text-theme-sm font-normal text-gray-500 dark:text-gray-400">({g.items.length})</span>
-                </h2>
-                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {g.items.map((e) => (
-                    <ReviewCard key={e.id} pid={pid} ent={e} target={e.entity_type === "change_proposal" ? reqById.get(String(e.fields.requirement_id)) : undefined} onAsk={ask} />
-                  ))}
-                </div>
-              </section>
-            ),
-        )
+        shown.map((g) => g.items.length > 0 && <ReviewGroup key={g.type} pid={pid} group={g} reqById={reqById} onAsk={ask} />)
       )}
     </div>
+  );
+}
+
+/** One group of the review queue (requirements, conflicts ...), paginated on its own. */
+function ReviewGroup({
+  pid,
+  group: g,
+  reqById,
+  onAsk,
+}: {
+  pid: string;
+  group: { type: string; label: string; Icon: (p: SVGProps<SVGSVGElement>) => ReactNode; items: Ent[] };
+  reqById: Map<string, Ent>;
+  onAsk: (a: Action, e: Ent) => void;
+}) {
+  const paged = usePaged(g.items, 10);
+  return (
+    <section aria-labelledby={`grp-${g.type}`}>
+      <h2 id={`grp-${g.type}`} className="mb-3 flex items-center gap-2 text-base font-medium text-gray-800 dark:text-white/90">
+        <g.Icon className="size-5 text-gray-500 dark:text-gray-400" />
+        {g.label}
+        <span className="text-theme-sm font-normal text-gray-500 dark:text-gray-400">({g.items.length})</span>
+      </h2>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {paged.items.map((e) => (
+          <ReviewCard
+            key={e.id}
+            pid={pid}
+            ent={e}
+            target={e.entity_type === "change_proposal" ? reqById.get(String(e.fields.requirement_id)) : undefined}
+            onAsk={onAsk}
+          />
+        ))}
+      </div>
+      <Pagination paged={paged} label={g.label} />
+    </section>
   );
 }
 
@@ -447,7 +581,10 @@ function ReviewCard({ pid, ent, target, onAsk }: { pid: string; ent: Ent; target
           {additions.length > 0 && (
             <ul className="space-y-1.5">
               {additions.map((a, i) => (
-                <li key={i} className="flex flex-wrap items-baseline gap-2 rounded-lg bg-green-50 px-3 py-2 text-gray-700 dark:bg-green-500/10 dark:text-gray-300">
+                <li
+                  key={i}
+                  className="flex flex-wrap items-baseline gap-2 rounded-lg bg-green-50 px-3 py-2 text-gray-700 dark:bg-green-500/10 dark:text-gray-300"
+                >
                   <span className="text-theme-xs font-medium text-green-700 dark:text-green-400">+ {a.section}</span>
                   <span className="min-w-0 flex-1">{a.text}</span>
                   <Badge tone={a.basis === "AI-inferred" ? "primary" : "gray"}>{a.basis}</Badge>
@@ -466,7 +603,10 @@ function ReviewCard({ pid, ent, target, onAsk }: { pid: string; ent: Ent; target
       {ref?.excerpt && (
         <blockquote className="mb-4 border-l-4 border-brand-200 pl-3 text-theme-xs text-gray-500 italic dark:border-brand-800 dark:text-gray-400">
           <Clamp lines={3}>{ref.excerpt}</Clamp>
-          <Link href={`/projects/${pid}/sources/${ref.source_id}`} className="mt-1 inline-block not-italic text-brand-500 hover:underline dark:text-brand-400">
+          <Link
+            href={`/projects/${pid}/sources/${ref.source_id}`}
+            className="mt-1 inline-block font-medium not-italic text-brand-600 hover:underline dark:text-brand-400"
+          >
             View source
           </Link>
         </blockquote>
@@ -489,7 +629,11 @@ type EditState = { title: string; fields: Record<string, unknown>; sections: Rec
 
 export function EntityEditor({ pid, ent, onDone, onCancel }: { pid: string; ent: Ent; onDone: () => void; onCancel: () => void }) {
   const spec = ENTITY_SPECS[ent.entity_type];
-  const [s, setS] = useState<EditState>(() => ({ title: ent.title, fields: { ...ent.fields }, sections: structuredClone(ent.sections) as Record<string, unknown> }));
+  const [s, setS] = useState<EditState>(() => ({
+    title: ent.title,
+    fields: { ...ent.fields },
+    sections: structuredClone(ent.sections) as Record<string, unknown>,
+  }));
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
   const setField = (k: string, v: unknown) => setS((p) => ({ ...p, fields: { ...p.fields, [k]: v } }));
@@ -519,26 +663,44 @@ export function EntityEditor({ pid, ent, onDone, onCancel }: { pid: string; ent:
           Saving creates revision {ent.revision + 1} in review. The approval stays with revision {ent.revision}; approve again when you are done.
         </p>
       )}
-      <Field label="Title">{(id) => <Input id={id} value={s.title} onChange={(e) => setS({ ...s, title: e.target.value })} required minLength={3} maxLength={200} />}</Field>
+      <Field label="Title">
+        {(id) => <Input id={id} value={s.title} onChange={(e) => setS({ ...s, title: e.target.value })} required minLength={3} maxLength={200} />}
+      </Field>
       {Object.entries(spec.sections)
         .filter(([k]) => !(HIDDEN_SECTIONS[ent.entity_type] ?? []).includes(k))
         .map(([k, kind]) => {
           if (kind === "text")
             return (
               <Field key={k} label={label(k)}>
-                {(id) => <Textarea id={id} rows={k === "description" || k === "question" ? 4 : 3} value={String(s.sections[k] ?? "")} onChange={(e) => setSection(k, e.target.value)} />}
+                {(id) => (
+                  <Textarea
+                    id={id}
+                    rows={k === "description" || k === "question" ? 4 : 3}
+                    value={String(s.sections[k] ?? "")}
+                    onChange={(e) => setSection(k, e.target.value)}
+                  />
+                )}
               </Field>
             );
           if (kind === "list")
             return (
               <Field key={k} label={label(k)} hint="One per line.">
-                {(id) => <Textarea id={id} rows={3} value={((s.sections[k] as string[]) ?? []).join("\n")} onChange={(e) => setSection(k, e.target.value.split("\n"))} />}
+                {(id) => (
+                  <Textarea
+                    id={id}
+                    rows={3}
+                    value={((s.sections[k] as string[]) ?? []).join("\n")}
+                    onChange={(e) => setSection(k, e.target.value.split("\n"))}
+                  />
+                )}
               </Field>
             );
           return <StatementsEditor key={k} name={label(k)} value={(s.sections[k] as Statement[]) ?? []} onChange={(v) => setSection(k, v)} />;
         })}
       {typeof s.sections._extra === "string" && (
-        <Field label={label("_extra")}>{(id) => <Textarea id={id} rows={3} value={String(s.sections._extra)} onChange={(e) => setSection("_extra", e.target.value)} />}</Field>
+        <Field label={label("_extra")}>
+          {(id) => <Textarea id={id} rows={3} value={String(s.sections._extra)} onChange={(e) => setSection("_extra", e.target.value)} />}
+        </Field>
       )}
       <fieldset className="grid grid-cols-1 gap-4 rounded-xl bg-gray-50 p-4 sm:grid-cols-2 dark:bg-white/[0.02]">
         <legend className="sr-only">Details</legend>
@@ -548,14 +710,28 @@ export function EntityEditor({ pid, ent, onDone, onCancel }: { pid: string; ent:
             if (kind === "boolean")
               return (
                 <label key={k} className="flex cursor-pointer items-center gap-3 self-end pb-2 text-theme-sm text-gray-700 dark:text-gray-300">
-                  <input type="checkbox" checked={s.fields[k] === true} onChange={(e) => setField(k, e.target.checked)} className="size-5 cursor-pointer rounded-md accent-brand-500" />
+                  <Checkbox checked={s.fields[k] === true} onChange={(e) => setField(k, e.target.checked)} className="size-5" />
                   {label(k)}
                 </label>
               );
             if (kind === "string_list")
               return (
                 <Field key={k} label={label(k)} hint="Comma-separated">
-                  {(id) => <Input id={id} value={((s.fields[k] as string[]) ?? []).join(", ")} onChange={(e) => setField(k, e.target.value.split(",").map((x) => x.trim()).filter(Boolean))} />}
+                  {(id) => (
+                    <Input
+                      id={id}
+                      value={((s.fields[k] as string[]) ?? []).join(", ")}
+                      onChange={(e) =>
+                        setField(
+                          k,
+                          e.target.value
+                            .split(",")
+                            .map((x) => x.trim())
+                            .filter(Boolean),
+                        )
+                      }
+                    />
+                  )}
                 </Field>
               );
             return (
@@ -603,7 +779,11 @@ function StatementsEditor({ name, value, onChange }: { name: string; value: Stat
               <div className="mt-1 flex flex-wrap gap-1.5">
                 <Badge tone={BASIS[st.basis]?.tone}>{BASIS[st.basis]?.label ?? st.basis}</Badge>
                 {st.review_state === "proposed" ? (
-                  <button type="button" onClick={() => set(i, { review_state: "accepted" })} className="rounded-full bg-amber-50 px-2.5 py-0.5 text-theme-xs font-medium text-amber-600 hover:bg-amber-100 dark:bg-amber-500/15 dark:text-orange-400">
+                  <button
+                    type="button"
+                    onClick={() => set(i, { review_state: "accepted" })}
+                    className="rounded-full bg-amber-50 px-2.5 py-0.5 text-theme-xs font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-500/15 dark:text-orange-400 dark:hover:bg-amber-500/25"
+                  >
                     proposed · mark reviewed
                   </button>
                 ) : (
@@ -611,7 +791,13 @@ function StatementsEditor({ name, value, onChange }: { name: string; value: Stat
                 )}
               </div>
             </div>
-            <Button variant="ghost" size="sm" className="mt-1 text-red-500 dark:text-red-400" aria-label={`Remove ${name} ${i + 1}`} onClick={() => onChange(value.filter((_, j) => j !== i))}>
+            <Button
+              variant="danger-ghost"
+              size="sm"
+              className="mt-1"
+              aria-label={`Remove ${name} ${i + 1}`}
+              onClick={() => onChange(value.filter((_, j) => j !== i))}
+            >
               <TrashIcon />
             </Button>
           </li>
@@ -623,4 +809,3 @@ function StatementsEditor({ name, value, onChange }: { name: string; value: Stat
     </fieldset>
   );
 }
-

@@ -13,7 +13,7 @@ async function main() {
   const app = createApp(config);
   const user = app.ctx.db.prepare("SELECT id, username FROM users LIMIT 1").get() as { id: string; username: string } | undefined;
   if (!user) {
-    console.error("Create the local account first: run `pnpm dev`, open http://127.0.0.1:3000 and complete setup. Then run this again.");
+    console.error("Create the local account first: run `pnpm dev`, open http://127.0.0.1:3005 and complete setup. Then run this again.");
     process.exit(1);
   }
   const existing = app.ctx.db.prepare("SELECT id FROM projects WHERE is_demo = 1").get() as { id: string } | undefined;

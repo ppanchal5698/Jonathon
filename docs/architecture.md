@@ -11,7 +11,7 @@ Verified versions are in [compatibility.md](compatibility.md).
 
 ```
  Browser (Parth)                         Claude Code
-     │  http://127.0.0.1:3000                │  POST http://127.0.0.1:4100/mcp
+     │  http://127.0.0.1:3005                │  POST http://127.0.0.1:4100/mcp
      ▼                                       │  Authorization: Bearer jon_…
  ┌────────────────────┐   /api/v1/* proxy    │
  │ apps/web (Next.js) │──────────────┐       │
@@ -56,6 +56,48 @@ Verified versions are in [compatibility.md](compatibility.md).
                                    ▼
 ```
 
+## Docker Compose deployment
+
+Same processes, one image per role ([docker.md](docker.md)). Demo mode only; live AI stays native (see docker.md "AI runtime").
+
+```
+ Host (loopback only)
+   127.0.0.1:3005 ─────────────┐            127.0.0.1:4100 (MCP for host Claude Code)
+                               │                       │
+ ┌─ Compose network ───────────┼───────────────────────┼──────────────────────────────┐
+ │                             ▼                       ▼                              │
+ │  ┌──────────────────────┐  /api/v1  ┌─────────────────────────┐                    │
+ │  │ web (jonathon-web)   │──────────▶│ server (jonathon-server)│  0.0.0.0:4100      │
+ │  │ Next.js standalone   │ server:4100│ main.ts: REST + /mcp    │  inside network    │
+ │  │ no data mounts       │           └────────────┬────────────┘                    │
+ │  └──────────────────────┘                        │ SQLite WAL + files              │
+ │                                    ┌─────────────▼───────────────┐                 │
+ │  ┌──────────────────────┐          │ /data  (Docker volume)      │                 │
+ │  │ worker (same image)  │─────────▶│ jonathon*.sqlite, projects/ │                 │
+ │  │ worker.ts, leases,   │          └─────────────────────────────┘                 │
+ │  │ health file          │──▶ /imports (read-only, optional)                        │
+ │  └──────────────────────┘                                                          │
+ │  init (one shot: marker check + migrations)   backup / restore (profile "tools")   │
+ └────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+All containers: uid 1000, read-only root filesystem, no capabilities, `no-new-privileges`, tini as PID 1.
+
+## Job lifecycle
+
+```
+enqueue ──(dedupe_key active? return it)──▶ queued ──claim (BEGIN IMMEDIATE)──▶ running ──▶ succeeded | partially_succeeded | unsupported | needs_ocr
+                                              ▲                                     │
+                                              │ backoff 2^n · jitter                ├─ transient error, attempts left ─▶ retrying
+                                              └──────── retrying ◀──────────────────┤
+                                                                                    ├─ permanent / exhausted / lease expired at max ─▶ failed + dead_letters row
+ replay (human, audited) ◀───────────────────────────────────────────────────────── ┤
+                                                                                    └─ cancel ─▶ cancelled      shutdown ─▶ released to queued
+```
+
+A handler runs inside the lease fence (`db.leaseFence`): each of its transactions re-checks the lease under SQLite's
+write lock, so a worker that lost the lease commits nothing.
+
 ## Request flows
 
 ### Upload → evidence
@@ -84,6 +126,18 @@ Verified versions are in [compatibility.md](compatibility.md).
    can cite only the drafted document. Drafting runs one document at a time per project.
    Near-duplicates of existing items are skipped (normalized text, token overlap with plural folding). Nothing produced
    here is approved or applied.
+
+### Folder import (`services/folder-import.ts`)
+
+Instead of uploading files one by one, the signed-in person can give the absolute path of a folder on this computer.
+`POST /sources/folder/scan` lists every file (sub-folders optional) as *new*, *changed* (same relative path, different
+content: imported as a new revision of that source), *unchanged*, *duplicate* (same content under another name) or
+*skipped* with a reason (unsupported type, empty, too large, temporary Office file, link or junction, tooling folders
+such as `.git` and `node_modules`). Nothing is read into Jonathon by a scan. `POST /sources/folder/import` takes the
+chosen relative paths and queues an `import_folder` job, which re-scans, accepts only paths the scan offers, and
+ingests each file through the normal upload path (so drafting, mapping and document refresh follow as usual). The
+display name of an imported file is its path inside the folder (`specs/rules.txt`). Limits: 2,000 documents, 2 GB, 12
+levels, 20,000 directory entries per scan.
 
 ### Agent team (`JONATHON_AGENT_TEAM`, default on)
 

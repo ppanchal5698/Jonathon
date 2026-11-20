@@ -1,5 +1,7 @@
 import { type ErrorCode, type Job, type JobStatus, type JobType, RETRYABLE_ERROR_CODES, TERMINAL_JOB_STATUSES } from "@jonathon/contracts";
+import { audit } from "../audit";
 import { all, type Db, one, run, tx } from "../db";
+import { assertHuman, type Principal } from "../security/principal";
 import { AppError, newId, nowIso, parseJson } from "../util";
 
 interface JobRow {
@@ -20,6 +22,7 @@ interface JobRow {
   cancel_requested: number;
   idempotency_key: string | null;
   serial_key: string | null;
+  dedupe_key: string | null;
   created_by: string;
   correlation_id: string | null;
   created_at: string;
@@ -59,10 +62,68 @@ export function toJob(r: JobRow): Job {
   };
 }
 
-const BACKOFF_MS = [2_000, 10_000, 60_000];
+export interface QueueOptions {
+  /** Attempts for jobs that do not set their own max_attempts. */
+  defaultMaxAttempts: number;
+  /** Exponential backoff: base * 2^(attempt-1), capped, with jitter (50–100 % of the step). */
+  backoffBaseMs: number;
+  backoffMaxMs: number;
+  /** Admission limit: queued + retrying + running jobs across all projects. Enqueue beyond it is RATE_LIMITED. */
+  maxActiveJobs: number;
+}
+
+export const DEFAULT_QUEUE_OPTIONS: QueueOptions = { defaultMaxAttempts: 3, backoffBaseMs: 2_000, backoffMaxMs: 5 * 60_000, maxActiveJobs: 10_000 };
+
+/** Delay before the next try after `attempt` attempts (1-based). Exported for tests. */
+export function backoffDelayMs(attempt: number, o: Pick<QueueOptions, "backoffBaseMs" | "backoffMaxMs">, random: () => number = Math.random): number {
+  const step = Math.min(o.backoffMaxMs, o.backoffBaseMs * 2 ** Math.max(0, attempt - 1));
+  return Math.round(step * (0.5 + 0.5 * random()));
+}
+
+/** Strip paths and long token-like strings from diagnostics kept in job and dead-letter records. */
+export function sanitizeDiagnostic(s: string | null | undefined): string {
+  return (s ?? "")
+    .replace(/[A-Za-z]:\\[^\s"']+/g, "<path>")
+    .replace(/\/(?:Users|home|tmp|var|data|imports|app)\/[^\s"']+/g, "<path>")
+    .replace(/(api[_-]?key|token|authorization|bearer|password)\s*[:=]?\s*\S+/gi, "$1 <redacted>")
+    .replace(/[A-Za-z0-9_-]{40,}/g, "<redacted>")
+    .slice(0, 2_000);
+}
+
+export interface DeadLetter {
+  id: string;
+  job_id: string;
+  project_id: string;
+  job_type: string;
+  reason: "attempts_exhausted" | "permanent_error" | "lease_expired";
+  error_code: string;
+  error_message: string;
+  attempts: number;
+  attempt_history: {
+    attempt: number;
+    worker_id: string;
+    started_at: string;
+    finished_at: string | null;
+    outcome: string | null;
+    error_code: string | null;
+    error_message: string | null;
+  }[];
+  dead_at: string;
+  replay_count: number;
+  replayed_at: string | null;
+  replayed_by: string | null;
+  job_status: JobStatus;
+}
 
 export class JobQueue {
-  constructor(private readonly db: Db) {}
+  readonly options: QueueOptions;
+
+  constructor(
+    private readonly db: Db,
+    options: Partial<QueueOptions> = {},
+  ) {
+    this.options = { ...DEFAULT_QUEUE_OPTIONS, ...options };
+  }
 
   enqueue(input: {
     projectId: string;
@@ -75,8 +136,18 @@ export class JobQueue {
     correlationId?: string | null;
     /** Earliest time the job may run (ISO). Defaults to now. */
     runAfter?: string;
+    /**
+     * Business-operation key (operation + input revision + configuration). While a job with the same key is queued,
+     * retrying or running, enqueue returns that job instead of creating a duplicate. Once it finishes, the same
+     * operation may run again on purpose. Enforced atomically by a partial unique index (migration 003).
+     */
+    dedupeKey?: string | null;
   }): Job {
     return tx(this.db, () => {
+      if (input.dedupeKey) {
+        const active = one<JobRow>(this.db, "SELECT * FROM jobs WHERE dedupe_key = ? AND status IN ('queued','running','retrying')", input.dedupeKey);
+        if (active) return toJob(active);
+      }
       if (input.idempotencyKey) {
         const existing = one<JobRow>(this.db, "SELECT * FROM jobs WHERE idempotency_key = ?", input.idempotencyKey);
         if (existing) {
@@ -86,20 +157,25 @@ export class JobQueue {
           return toJob(existing);
         }
       }
+      const active = one<{ n: number }>(this.db, "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running','retrying')")!.n;
+      if (active >= this.options.maxActiveJobs) {
+        throw new AppError("RATE_LIMITED", `the job queue is full (${active} active jobs); wait for running work to finish`);
+      }
       const id = newId("job");
       const now = nowIso();
       run(
         this.db,
-        `INSERT INTO jobs (id, project_id, type, status, payload, attempts, max_attempts, run_after, idempotency_key, serial_key, created_by, correlation_id, created_at, updated_at)
-         VALUES (?,?,?,'queued',?,0,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO jobs (id, project_id, type, status, payload, attempts, max_attempts, run_after, idempotency_key, serial_key, dedupe_key, created_by, correlation_id, created_at, updated_at)
+         VALUES (?,?,?,'queued',?,0,?,?,?,?,?,?,?,?,?)`,
         id,
         input.projectId,
         input.type,
         JSON.stringify(input.payload),
-        input.maxAttempts ?? 3,
+        input.maxAttempts ?? this.options.defaultMaxAttempts,
         input.runAfter ?? now,
         input.idempotencyKey ?? null,
         input.serialKey ?? null,
+        input.dedupeKey ?? null,
         input.createdBy,
         input.correlationId ?? null,
         now,
@@ -129,8 +205,8 @@ export class JobQueue {
   }
 
   /**
-   * Atomically claim the oldest runnable job. Jobs sharing a serial_key (one conversation) never run
-   * concurrently, which serializes turns within a conversation.
+   * Atomically claim the oldest runnable job (SELECT + UPDATE inside one BEGIN IMMEDIATE, so two workers can never
+   * claim the same row). Jobs sharing a serial_key (one conversation) never run concurrently.
    */
   claim(workerId: string, leaseMs: number, types?: JobType[]): ClaimedJob | null {
     return tx(this.db, () => {
@@ -194,8 +270,14 @@ export class JobQueue {
     return { owned: r.changes === 1, cancelRequested: row?.cancel_requested === 1 };
   }
 
-  setProgress(jobId: string, stage: string, detail?: string): void {
-    run(this.db, "UPDATE jobs SET progress = ?, updated_at = ? WHERE id = ?", JSON.stringify({ stage, detail }), nowIso(), jobId);
+  /** Progress from the lease holder only; a worker that lost its lease cannot overwrite the new holder's progress. */
+  setProgress(jobId: string, stage: string, detail?: string, workerId?: string): void {
+    const progress = JSON.stringify({ stage, detail });
+    if (workerId) {
+      run(this.db, "UPDATE jobs SET progress = ?, updated_at = ? WHERE id = ? AND lease_owner = ? AND status = 'running'", progress, nowIso(), jobId, workerId);
+    } else {
+      run(this.db, "UPDATE jobs SET progress = ?, updated_at = ? WHERE id = ?", progress, nowIso(), jobId);
+    }
   }
 
   private finishAttempt(jobId: string, workerId: string, outcome: string, code: string | null, message: string | null): void {
@@ -212,16 +294,17 @@ export class JobQueue {
     );
   }
 
-  complete(jobId: string, workerId: string, status: JobStatus, result: unknown): void {
+  /** Record success from the lease holder. Returns false (and changes nothing) when this worker lost the lease. */
+  complete(jobId: string, workerId: string, status: JobStatus, result: unknown): boolean {
     if (!TERMINAL_JOB_STATUSES.includes(status) || status === "failed" || status === "cancelled") {
       throw new Error(`complete() needs a success-like terminal status, got ${status}`);
     }
-    tx(this.db, () => {
+    return tx(this.db, () => {
       const now = nowIso();
-      run(
+      const r = run(
         this.db,
         `UPDATE jobs SET status = ?, result = ?, lease_owner = NULL, lease_expires_at = NULL, finished_at = ?, updated_at = ?,
-           error_code = NULL, error_message = NULL WHERE id = ? AND lease_owner = ?`,
+           error_code = NULL, error_message = NULL WHERE id = ? AND lease_owner = ? AND status = 'running'`,
         status,
         JSON.stringify(result ?? null),
         now,
@@ -229,37 +312,79 @@ export class JobQueue {
         jobId,
         workerId,
       );
+      if (r.changes !== 1) {
+        this.finishAttempt(jobId, workerId, "stale_result_discarded", "LEASE_LOST", "lease lost before completion");
+        return false;
+      }
       this.finishAttempt(jobId, workerId, status, null, null);
+      return true;
     });
   }
 
-  /** Record a failure; retries retryable errors with backoff until max_attempts. */
+  /**
+   * Record a failure from the lease holder. Transient (retryable) codes retry with exponential backoff and jitter
+   * until max_attempts; permanent codes and exhausted retries fail the job and write a durable dead-letter record.
+   * A worker that no longer holds the lease changes nothing and gets the job's current status back.
+   */
   fail(jobId: string, workerId: string, code: ErrorCode, message: string): JobStatus {
     return tx(this.db, () => {
       const row = one<JobRow>(this.db, "SELECT * FROM jobs WHERE id = ?", jobId);
       if (!row) return "failed";
+      const msg = sanitizeDiagnostic(message);
+      if (row.status !== "running" || row.lease_owner !== workerId) {
+        this.finishAttempt(jobId, workerId, "stale_failure_discarded", code, msg);
+        return row.status;
+      }
       const now = nowIso();
+      const retryable = RETRYABLE_ERROR_CODES.includes(code);
       let status: JobStatus;
       if (code === "JOB_CANCELLED" || row.cancel_requested === 1) status = "cancelled";
-      else if (RETRYABLE_ERROR_CODES.includes(code) && row.attempts < row.max_attempts) status = "retrying";
+      else if (retryable && row.attempts < row.max_attempts) status = "retrying";
       else status = "failed";
-      const runAfter = status === "retrying" ? new Date(Date.now() + (BACKOFF_MS[row.attempts - 1] ?? 60_000)).toISOString() : row.run_after;
+      const runAfter = status === "retrying" ? new Date(Date.now() + backoffDelayMs(row.attempts, this.options)).toISOString() : row.run_after;
       run(
         this.db,
         `UPDATE jobs SET status = ?, error_code = ?, error_message = ?, run_after = ?, lease_owner = NULL, lease_expires_at = NULL,
            finished_at = CASE WHEN ? IN ('failed','cancelled') THEN ? ELSE NULL END, updated_at = ? WHERE id = ?`,
         status,
         code,
-        message.slice(0, 2_000),
+        msg,
         runAfter,
         status,
         now,
         now,
         jobId,
       );
-      this.finishAttempt(jobId, workerId, status, code, message.slice(0, 2_000));
+      this.finishAttempt(jobId, workerId, status, code, msg);
+      if (status === "failed") this.deadLetter(row, retryable ? "attempts_exhausted" : "permanent_error", code, msg);
       return status;
     });
+  }
+
+  /** Must run inside tx(). One record per job; a replayed job that fails again refreshes it. */
+  private deadLetter(row: JobRow, reason: DeadLetter["reason"], code: string, message: string): void {
+    const history = all(
+      this.db,
+      "SELECT attempt, worker_id, started_at, finished_at, outcome, error_code, error_message FROM job_attempts WHERE job_id = ? ORDER BY started_at, attempt",
+      row.id,
+    );
+    run(
+      this.db,
+      `INSERT INTO dead_letters (id, job_id, project_id, job_type, reason, error_code, error_message, attempts, attempt_history, dead_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(job_id) DO UPDATE SET reason = excluded.reason, error_code = excluded.error_code, error_message = excluded.error_message,
+         attempts = excluded.attempts, attempt_history = excluded.attempt_history, dead_at = excluded.dead_at, replayed_at = NULL, replayed_by = NULL`,
+      newId("dlq"),
+      row.id,
+      row.project_id,
+      row.type,
+      reason,
+      code,
+      message,
+      row.attempts,
+      JSON.stringify(history),
+      nowIso(),
+    );
   }
 
   /** Worker shutting down: put the job back without counting it as a failure. */
@@ -302,42 +427,107 @@ export class JobQueue {
     });
   }
 
-  retry(jobId: string): Job {
+  /**
+   * Operator replay of a failed (dead-lettered) or cancelled job: human only, audited, safe to repeat.
+   * The same job row is re-queued, so its idempotency key, dedupe key and payload (input revision) are unchanged and
+   * the handlers' business-level deduplication applies. If another active job already performs the same operation,
+   * that job is returned and nothing is re-queued. Replaying a job that is already queued, retrying or running returns
+   * it unchanged, so a double click or a retried request has no extra effect.
+   */
+  replay(
+    principal: Principal,
+    jobId: string,
+    opts: { projectId?: string; correlationId?: string } = {},
+  ): { job: Job; replayed: boolean; duplicate_of?: string } {
+    assertHuman(principal);
     return tx(this.db, () => {
       const row = one<JobRow>(this.db, "SELECT * FROM jobs WHERE id = ?", jobId);
-      if (!row) throw new AppError("JOB_NOT_FOUND", "job not found");
-      if (!["failed", "cancelled"].includes(row.status)) throw new AppError("INVALID_TRANSITION", `cannot retry a ${row.status} job`);
+      if (!row || (opts.projectId && row.project_id !== opts.projectId)) throw new AppError("JOB_NOT_FOUND", "job not found");
+      if (["queued", "running", "retrying"].includes(row.status)) return { job: toJob(row), replayed: false };
+      if (!["failed", "cancelled"].includes(row.status)) throw new AppError("INVALID_TRANSITION", `cannot replay a ${row.status} job`);
+      if (row.dedupe_key) {
+        const active = one<JobRow>(this.db, "SELECT * FROM jobs WHERE dedupe_key = ? AND status IN ('queued','running','retrying')", row.dedupe_key);
+        if (active) return { job: toJob(active), replayed: false, duplicate_of: active.id };
+      }
+      const now = nowIso();
       run(
         this.db,
-        `UPDATE jobs SET status='queued', attempts=0, cancel_requested=0, error_code=NULL, error_message=NULL, run_after=?, finished_at=NULL, updated_at=? WHERE id=?`,
-        nowIso(),
-        nowIso(),
+        "UPDATE jobs SET status='queued', attempts=0, cancel_requested=0, error_code=NULL, error_message=NULL, run_after=?, finished_at=NULL, updated_at=? WHERE id=?",
+        now,
+        now,
         jobId,
       );
-      return this.get(jobId);
+      run(
+        this.db,
+        "UPDATE dead_letters SET replay_count = replay_count + 1, replayed_at = ?, replayed_by = ? WHERE job_id = ?",
+        now,
+        principal.username,
+        jobId,
+      );
+      audit(this.db, {
+        principal,
+        projectId: row.project_id,
+        action: "job.replayed",
+        entityType: "job",
+        entityId: jobId,
+        details: { job_type: row.type, previous_status: row.status, previous_error: row.error_code },
+        correlationId: opts.correlationId ?? null,
+      });
+      return { job: this.get(jobId), replayed: true };
     });
   }
 
-  /** Requeue jobs whose worker died (lease expired). Called by every worker on start and periodically. */
+  /** Backwards-compatible alias used by the REST retry route; same rules as replay(). */
+  retry(principal: Principal, jobId: string, opts: { projectId?: string; correlationId?: string } = {}): Job {
+    return this.replay(principal, jobId, opts).job;
+  }
+
+  listDeadLetters(filter: { projectId?: string; includeReplayed?: boolean; limit?: number } = {}): DeadLetter[] {
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (filter.projectId) {
+      where.push("d.project_id = ?");
+      params.push(filter.projectId);
+    }
+    if (!filter.includeReplayed) where.push("d.replayed_at IS NULL");
+    const rows = all<Record<string, unknown>>(
+      this.db,
+      `SELECT d.*, j.status AS job_status FROM dead_letters d JOIN jobs j ON j.id = d.job_id ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+       ORDER BY d.dead_at DESC LIMIT ?`,
+      ...params,
+      Math.min(Math.max(filter.limit ?? 100, 1), 500),
+    );
+    return rows.map((r) => ({ ...(r as unknown as DeadLetter), attempt_history: parseJson(r.attempt_history as string, []) }));
+  }
+
+  /** Requeue jobs whose worker died or stalled (lease expired). Called by every worker on start and periodically. */
   recoverExpiredLeases(): number {
     return tx(this.db, () => {
       const now = nowIso();
       const rows = all<JobRow>(this.db, "SELECT * FROM jobs WHERE status = 'running' AND lease_expires_at < ?", now);
       for (const r of rows) {
         const status: JobStatus = r.cancel_requested === 1 ? "cancelled" : r.attempts < r.max_attempts ? "retrying" : "failed";
+        const runAfter = status === "retrying" ? new Date(Date.now() + backoffDelayMs(r.attempts, this.options)).toISOString() : now;
+        const msg = "worker stopped or stalled while running this job (lease expired)";
         run(
           this.db,
-          `UPDATE jobs SET status = ?, lease_owner = NULL, lease_expires_at = NULL, error_code = 'ANTIGRAVITY_UNAVAILABLE',
-             error_message = 'worker stopped while running this job (lease expired)', run_after = ?, updated_at = ?,
-             finished_at = CASE WHEN ? IN ('failed','cancelled') THEN ? ELSE NULL END WHERE id = ?`,
+          `UPDATE jobs SET status = ?, lease_owner = NULL, lease_expires_at = NULL, error_code = 'LEASE_LOST', error_message = ?, run_after = ?,
+             updated_at = ?, finished_at = CASE WHEN ? IN ('failed','cancelled') THEN ? ELSE NULL END WHERE id = ?`,
           status,
-          now,
+          msg,
+          runAfter,
           now,
           status,
           now,
           r.id,
         );
-        run(this.db, "UPDATE job_attempts SET finished_at = ?, outcome = 'lease_expired' WHERE job_id = ? AND finished_at IS NULL", now, r.id);
+        run(
+          this.db,
+          "UPDATE job_attempts SET finished_at = ?, outcome = 'lease_expired', error_code = 'LEASE_LOST' WHERE job_id = ? AND finished_at IS NULL",
+          now,
+          r.id,
+        );
+        if (status === "failed") this.deadLetter(r, "lease_expired", "LEASE_LOST", msg);
       }
       return rows.length;
     });

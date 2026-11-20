@@ -93,7 +93,7 @@ async function main() {
   // Services
   for (const [name, url] of [
     ["API server", `http://127.0.0.1:${config.port}/api/v1/health`],
-    ["Web UI", "http://127.0.0.1:3000/login"],
+    ["Web UI", "http://127.0.0.1:3005/login"],
   ] as const) {
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(3_000) });

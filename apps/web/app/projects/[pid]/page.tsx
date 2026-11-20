@@ -4,6 +4,7 @@ import type { Job, KnowledgeEntity, Project, Source } from "@jonathon/contracts"
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, Suspense, useRef, useState } from "react";
 import { Chat } from "@/components/chat";
+import { FolderImport } from "@/components/folder-import";
 import { MemoryGraph } from "@/components/memory-graph";
 import { Shell } from "@/components/shell";
 import {
@@ -25,30 +26,45 @@ import {
   A,
   Badge,
   Button,
+  buttonClass,
   Card,
+  Checkbox,
+  ConfirmPhrase,
   Empty,
   ErrorBanner,
   Field,
   Input,
-  Loading,
+  ListSkeleton,
   Notice,
   PageHeader,
+  PageSkeleton,
+  Pagination,
   Select,
   StatCard,
   Tabs,
+  TableSkeleton,
+  tabId,
   Textarea,
   Time,
   table,
+  usePaged,
 } from "@/components/ui";
 import { type ApiError, api, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
 const TABS = PROJECT_SECTIONS.map(([key, label]) => [key, label] as const);
+const JOB_LABEL: Record<string, string> = {
+  ingest: "extracting text",
+  extract_knowledge: "AI drafting requirements",
+  graph_extract: "mapping concepts into the memory graph",
+  generate_documents: "writing technical documents",
+  import_folder: "importing a folder",
+};
 
 export default function ProjectPage() {
   return (
     <Shell>
-      <Suspense fallback={<Loading />}>
+      <Suspense fallback={<PageSkeleton label="project" tabs={8} />}>
         <ProjectBody />
       </Suspense>
     </Shell>
@@ -64,7 +80,7 @@ function ProjectBody() {
   const tab = params.get("tab") ?? "overview";
   const project = useApi<ProjectWithCounts>(`/projects/${pid}`);
   if (project.error) return <ErrorBanner error={project.error} />;
-  if (!project.data) return <Loading />;
+  if (!project.data) return <PageSkeleton label="project" tabs={8} />;
   const p = project.data;
   const tabLabel = TABS.find(([k]) => k === tab)?.[1] ?? "Overview";
   const toReview = p.counts.to_review ?? 0;
@@ -79,9 +95,9 @@ function ProjectBody() {
         </div>
       </PageHeader>
       <div className="mb-6">
-        <Tabs label="Project sections" tabs={tabs} active={tab} onChange={(key) => router.replace(`/projects/${pid}?tab=${key}`)} />
+        <Tabs label="Project sections" panelId="project-panel" tabs={tabs} active={tab} onChange={(key) => router.replace(`/projects/${pid}?tab=${key}`)} />
       </div>
-      <div role="tabpanel">
+      <div role="tabpanel" id="project-panel" aria-labelledby={tabId("project-panel", tab)}>
         {tab === "overview" && <Overview project={p} />}
         {tab === "review" && <ReviewQueue pid={pid} onChanged={() => void project.reload()} />}
         {tab === "documents" && <Documents pid={pid} aiEnabled={p.ai_enabled} onProcessed={() => void project.reload()} />}
@@ -101,6 +117,7 @@ function ProjectBody() {
 
 function Overview({ project }: { project: ProjectWithCounts }) {
   const activity = useApi<Array<Record<string, any>>>(`/projects/${project.id}/activity`);
+  const activityPage = usePaged(activity.data, 10);
   const c = project.counts;
   const base = `/projects/${project.id}?tab=`;
   return (
@@ -143,23 +160,28 @@ function Overview({ project }: { project: ProjectWithCounts }) {
           <p className="text-theme-sm whitespace-pre-wrap text-gray-600 dark:text-gray-300">{project.description || "No description."}</p>
         </Card>
         <Card title="Recent activity" className="col-span-12 xl:col-span-5">
-          <ol className="relative space-y-4 border-l border-gray-200 pl-5 dark:border-gray-800">
-            {(activity.data ?? []).slice(0, 12).map((a) => (
-              <li key={a.id} className="relative">
-                <span
-                  className="absolute top-1.5 -left-[25px] size-2.5 rounded-full border-2 border-white bg-brand-500 dark:border-gray-900"
-                  aria-hidden="true"
-                />
-                <p className="text-theme-sm text-gray-800 dark:text-white/90">
-                  {a.action.replace(/[._]/g, " ")}
-                  {a.entity_id ? <span className="font-mono text-gray-500 dark:text-gray-400"> {a.entity_id}</span> : null}
-                </p>
-                <p className="text-theme-xs text-gray-500 dark:text-gray-400">
-                  <Time iso={a.at} />
-                </p>
-              </li>
-            ))}
-          </ol>
+          {!activity.data && !activity.error && <ListSkeleton rows={5} label="recent activity" />}
+          {activity.data?.length === 0 && <p className="text-theme-sm text-gray-500 dark:text-gray-400">No activity yet.</p>}
+          {activityPage.items.length > 0 && (
+            <ol className="relative space-y-4 border-l border-gray-200 pl-5 dark:border-gray-800">
+              {activityPage.items.map((a) => (
+                <li key={a.id} className="relative">
+                  <span
+                    className="absolute top-1.5 -left-[25px] size-2.5 rounded-full border-2 border-white bg-brand-500 dark:border-gray-900"
+                    aria-hidden="true"
+                  />
+                  <p className="text-theme-sm text-gray-800 dark:text-white/90">
+                    {a.action.replace(/[._]/g, " ")}
+                    {a.entity_id ? <span className="font-mono text-gray-500 dark:text-gray-400"> {a.entity_id}</span> : null}
+                  </p>
+                  <p className="text-theme-xs text-gray-500 dark:text-gray-400">
+                    <Time iso={a.at} />
+                  </p>
+                </li>
+              ))}
+            </ol>
+          )}
+          <Pagination paged={activityPage} label="Recent activity" />
         </Card>
       </div>
     </div>
@@ -227,52 +249,67 @@ function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: bo
       setError(err as ApiError);
     }
   };
+  const sourcePage = usePaged(sources.data, 20);
   const active = (jobs.data ?? []).filter((j) => ["queued", "running", "retrying"].includes(j.status));
   const interpreted = (jobs.data ?? []).filter((j) => j.type === "extract_knowledge" && !["queued", "running", "retrying"].includes(j.status)).slice(0, 5);
 
   return (
     <div className="grid grid-cols-12 gap-4 md:gap-6">
       <div className="col-span-12 space-y-4 md:space-y-6 xl:col-span-8">
+        <FolderImport
+          pid={pid}
+          aiEnabled={aiEnabled}
+          onQueued={() => {
+            void sources.reload();
+            void jobs.reload();
+          }}
+        />
         <Card title="Documents" desc="Originals are kept byte-for-byte; each upload of changed content becomes a new revision.">
           <ErrorBanner error={sources.error} />
-          {sources.data?.length ? (
-            <div className={table.wrap}>
-              <table className={table.table}>
-                <thead className={table.thead}>
-                  <tr>
-                    <th className={table.th}>Name</th>
-                    <th className={table.th}>Status</th>
-                    <th className={table.th}>Chunks</th>
-                    <th className={table.th}>Rev.</th>
-                    <th className={table.th}>Added</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sources.data.map((s) => (
-                    <tr key={s.id} className={table.tr}>
-                      <td className={table.td}>
-                        <div className="flex items-center gap-3">
-                          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                            <DocumentIcon className="size-5" />
-                          </span>
-                          <A href={`/projects/${pid}/sources/${s.id}`} className="truncate text-gray-800 dark:text-white/90">
-                            {s.display_name}
-                          </A>
-                        </div>
-                      </td>
-                      <td className={table.td}>
-                        <Badge>{s.current?.extraction_status ?? "pending"}</Badge>
-                      </td>
-                      <td className={table.td}>{s.current?.chunk_count ?? 0}</td>
-                      <td className={table.td}>{s.current?.revision_number}</td>
-                      <td className={`${table.td} text-theme-xs`}>
-                        <Time iso={s.created_at} />
-                      </td>
+          {!sources.data && !sources.error ? (
+            <TableSkeleton rows={5} cols={5} label="documents" />
+          ) : sources.data?.length ? (
+            <>
+              <div className={table.wrap}>
+                <table className={table.table}>
+                  <thead className={table.thead}>
+                    <tr>
+                      <th className={table.th}>Name</th>
+                      <th className={table.th}>Status</th>
+                      <th className={table.th}>Chunks</th>
+                      <th className={table.th}>Rev.</th>
+                      <th className={table.th}>Added</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {sourcePage.items.map((s) => (
+                      <tr key={s.id} className={table.tr}>
+                        <td className={`${table.td} min-w-[16rem]`}>
+                          <div className="flex items-center gap-3">
+                            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                              <DocumentIcon className="size-5" />
+                            </span>
+                            {/* Long file paths wrap instead of stretching the table. */}
+                            <A href={`/projects/${pid}/sources/${s.id}`} className="min-w-0 [overflow-wrap:anywhere] text-gray-800 dark:text-white/90">
+                              {s.display_name}
+                            </A>
+                          </div>
+                        </td>
+                        <td className={table.td}>
+                          <Badge>{s.current?.extraction_status ?? "pending"}</Badge>
+                        </td>
+                        <td className={table.td}>{s.current?.chunk_count ?? 0}</td>
+                        <td className={table.td}>{s.current?.revision_number}</td>
+                        <td className={`${table.td} text-theme-xs whitespace-nowrap`}>
+                          <Time iso={s.created_at} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Pagination paged={sourcePage} label="Documents" />
+            </>
           ) : (
             !sources.loading && (
               <Empty title="No documents yet" icon={<DocumentIcon />}>
@@ -289,7 +326,7 @@ function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: bo
                   <span className="size-4 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" aria-hidden="true" />
                   <Badge>{j.status}</Badge>
                   <span className="text-gray-700 dark:text-gray-300">
-                    {j.type === "extract_knowledge" ? "AI drafting requirements" : j.type === "ingest" ? "extracting text" : j.type.replace("_", " ")}
+                    {JOB_LABEL[j.type] ?? j.type.replace(/_/g, " ")}
                     {j.progress ? ` · ${j.progress.stage}${j.progress.detail ? ` (${j.progress.detail})` : ""}` : ""}
                   </span>
                 </li>
@@ -381,7 +418,13 @@ function Documents({ pid, aiEnabled, onProcessed }: { pid: string; aiEnabled: bo
                 onChange={(e) => upload(e.target.files)}
                 className="peer sr-only"
               />
-              <span className="inline-flex h-10 items-center rounded-lg bg-brand-500 px-4 text-theme-sm font-medium text-white shadow-theme-xs peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-500 hover:bg-brand-600">
+              <span
+                className={buttonClass(
+                  "primary",
+                  "md",
+                  "peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-500 peer-disabled:cursor-not-allowed peer-disabled:bg-brand-300 dark:peer-disabled:bg-brand-800",
+                )}
+              >
                 Browse files
               </span>
             </label>
@@ -449,6 +492,7 @@ function EntityList({ pid, type, onChanged }: { pid: string; type: string; onCha
   });
   const [creating, setCreating] = useState(false);
   const shown = (list.data ?? []).filter((e) => !q || `${e.human_id} ${e.title}`.toLowerCase().includes(q.toLowerCase()));
+  const paged = usePaged(shown, 20, `${status}|${q}`);
   return (
     <Card
       title={TYPE_TITLE[type] ?? type}
@@ -492,56 +536,61 @@ function EntityList({ pid, type, onChanged }: { pid: string; type: string; onCha
         <Field label="Filter">{(id) => <Input id={id} value={q} onChange={(e) => setQ(e.target.value)} placeholder="ID or title" />}</Field>
       </div>
       <ErrorBanner error={list.error} />
-      {shown.length ? (
-        <div className={table.wrap}>
-          <table className={table.table}>
-            <thead className={table.thead}>
-              <tr>
-                <th className={table.th}>ID</th>
-                <th className={table.th}>Title</th>
-                <th className={table.th}>Flags</th>
-                <th className={table.th}>Status</th>
-                <th className={table.th}>Rev.</th>
-                <th className={table.th}>
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((e) => (
-                <tr key={e.id} className={table.tr}>
-                  <td className={`${table.td} whitespace-nowrap`}>
-                    <A href={`/projects/${pid}/entities/${e.human_id}`} className="font-mono">
-                      {e.human_id}
-                    </A>
-                  </td>
-                  <td className={`${table.td} text-gray-800 dark:text-white/90`}>{e.title}</td>
-                  <td className={table.td}>
-                    <div className="flex flex-wrap gap-1">
-                      {e.fields.blocking === true && <Badge tone="error">blocking</Badge>}
-                      {e.fields.origin === "ai_proposed" && <Badge tone="primary">AI-proposed</Badge>}
-                      {e.fields.reviewed === true && e.status === "open" && <Badge tone="success">reviewed</Badge>}
-                      {e.status === "approved" && !e.approval_valid && <Badge tone="error">approval not valid</Badge>}
-                      {e.file_state !== "ok" && <Badge tone="error">{e.file_state}</Badge>}
-                      {e.stale && <Badge tone="gray">stale</Badge>}
-                    </div>
-                  </td>
-                  <td className={table.td}>
-                    <Badge>{e.status}</Badge>
-                  </td>
-                  <td className={`${table.td} text-theme-xs text-gray-500`}>{e.revision}</td>
-                  <td className={`${table.td} text-right`}>
-                    <div className="flex justify-end">
-                      <ReviewButtons pid={pid} ent={e} onAsk={ask} size="sm" />
-                    </div>
-                  </td>
+      {!list.data && !list.error ? (
+        <TableSkeleton rows={6} cols={6} label={(TYPE_TITLE[type] ?? type).toLowerCase()} />
+      ) : shown.length ? (
+        <>
+          <div className={table.wrap}>
+            <table className={table.table}>
+              <thead className={table.thead}>
+                <tr>
+                  <th className={table.th}>ID</th>
+                  <th className={table.th}>Title</th>
+                  <th className={table.th}>Flags</th>
+                  <th className={table.th}>Status</th>
+                  <th className={table.th}>Rev.</th>
+                  <th className={table.th}>
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {paged.items.map((e) => (
+                  <tr key={e.id} className={table.tr}>
+                    <td className={`${table.td} whitespace-nowrap`}>
+                      <A href={`/projects/${pid}/entities/${e.human_id}`} className="font-mono">
+                        {e.human_id}
+                      </A>
+                    </td>
+                    <td className={`${table.td} text-gray-800 dark:text-white/90`}>{e.title}</td>
+                    <td className={table.td}>
+                      <div className="flex flex-wrap gap-1">
+                        {e.fields.blocking === true && <Badge tone="error">blocking</Badge>}
+                        {e.fields.origin === "ai_proposed" && <Badge tone="primary">AI-proposed</Badge>}
+                        {e.fields.reviewed === true && e.status === "open" && <Badge tone="success">reviewed</Badge>}
+                        {e.status === "approved" && !e.approval_valid && <Badge tone="error">approval not valid</Badge>}
+                        {e.file_state !== "ok" && <Badge tone="error">{e.file_state}</Badge>}
+                        {e.stale && <Badge tone="gray">stale</Badge>}
+                      </div>
+                    </td>
+                    <td className={table.td}>
+                      <Badge>{e.status}</Badge>
+                    </td>
+                    <td className={`${table.td} text-theme-xs text-gray-500 tabular-nums dark:text-gray-400`}>{e.revision}</td>
+                    <td className={`${table.td} text-right`}>
+                      <div className="flex justify-end">
+                        <ReviewButtons pid={pid} ent={e} onAsk={ask} size="sm" />
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination paged={paged} label={TYPE_TITLE[type] ?? type} />
+        </>
       ) : (
-        !list.loading && <Empty title="Nothing here yet" icon={<ChecklistIcon />} />
+        <Empty title={q || status ? "Nothing matches the filter" : "Nothing here yet"} icon={<ChecklistIcon />} />
       )}
     </Card>
   );
@@ -607,6 +656,103 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
     }
   };
   return (
+    <div className="space-y-6">
+      <ProjectSettingsForm
+        name={name}
+        setName={setName}
+        description={description}
+        setDescription={setDescription}
+        ai={ai}
+        setAi={setAi}
+        error={error}
+        saved={saved}
+        save={save}
+      />
+      <DeleteProject project={project} />
+    </div>
+  );
+}
+
+/** Permanently delete the project, its files and its records (DELETE /projects/:pid with the typed phrase). */
+function DeleteProject({ project }: { project: Project }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  const phrase = `delete ${project.name}`;
+  return (
+    <Card title="Delete project" desc="Remove this project and everything Jonathon stores for it.">
+      {!open ? (
+        <Button variant="danger" onClick={() => setOpen(true)}>
+          Delete this project…
+        </Button>
+      ) : (
+        <div className="max-w-2xl space-y-4">
+          <Notice tone="warning">
+            This permanently removes every uploaded original, extraction, requirement, decision, question, conflict, proposal and its history, approvals,
+            conversations and answers, generated documents, the memory graph, search index and jobs for <strong>{project.name}</strong>. MCP credentials lose
+            access to it (a credential limited to this project is revoked). It cannot be undone. The activity log keeps a record that the project was
+            deleted. Backups made earlier still contain it, and Jonathon cannot delete copies the model provider or Antigravity may hold.
+          </Notice>
+          <ConfirmPhrase phrase={phrase} value={confirm} onChange={setConfirm} />
+          <ErrorBanner error={error} />
+          <div className="flex gap-3">
+            <Button
+              variant="danger"
+              disabled={busy || confirm.trim() !== phrase}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await api("DELETE", `/projects/${project.id}`, { confirmation: confirm });
+                  router.replace("/");
+                } catch (e) {
+                  setError(e as ApiError);
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? "Deleting…" : "Delete permanently"}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setOpen(false);
+                setConfirm("");
+                setError(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ProjectSettingsForm({
+  name,
+  setName,
+  description,
+  setDescription,
+  ai,
+  setAi,
+  error,
+  saved,
+  save,
+}: {
+  name: string;
+  setName: (v: string) => void;
+  description: string;
+  setDescription: (v: string) => void;
+  ai: boolean;
+  setAi: (v: boolean) => void;
+  error: ApiError | null;
+  saved: boolean;
+  save: (e: FormEvent) => void;
+}) {
+  return (
     <Card title="Project settings" desc="Name, description and AI-processing consent for this project.">
       <form onSubmit={save} className="max-w-2xl space-y-5">
         <Field label="Name">{(id) => <Input id={id} value={name} onChange={(e) => setName(e.target.value)} required />}</Field>
@@ -614,12 +760,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         <fieldset className="rounded-xl border border-amber-500 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/15">
           <legend className="px-1 text-theme-sm font-semibold text-gray-800 dark:text-white/90">AI processing</legend>
           <label className="flex cursor-pointer items-start gap-3 text-theme-sm text-gray-700 dark:text-gray-300">
-            <input
-              type="checkbox"
-              checked={ai}
-              onChange={(e) => setAi(e.target.checked)}
-              className="mt-0.5 size-5 shrink-0 cursor-pointer rounded-md accent-brand-500"
-            />
+            <Checkbox checked={ai} onChange={(e) => setAi(e.target.checked)} className="mt-0.5 size-5" />
             <span>
               Allow Jonathon to send this project&apos;s client text to the Antigravity CLI for answers and draft extraction. The CLI forwards it to its
               configured model provider and keeps transcripts locally. Turning this off stops new AI processing; it cannot recall text already sent.
@@ -630,7 +771,7 @@ function Settings({ project, onSaved }: { project: Project; onSaved: () => void 
         <div className="flex items-center gap-3">
           <Button type="submit">Save</Button>
           {saved && (
-            <span role="status" className="text-theme-sm font-medium text-green-600 dark:text-green-500">
+            <span role="status" className="text-theme-sm font-medium text-green-700 dark:text-green-400">
               Saved.
             </span>
           )}
@@ -684,12 +825,12 @@ function TeamSummary({
       </span>
       {team.rejected.length > 0 && (
         <details className="mt-1">
-          <summary className="cursor-pointer text-brand-500 dark:text-brand-400">Show what was removed and why</summary>
+          <summary className="w-fit font-medium text-brand-600 dark:text-brand-400">Show what was removed and why</summary>
           <ul className="mt-1 space-y-1">
             {team.rejected.map((x, i) => (
               <li key={i} className="rounded-lg bg-gray-50 px-2 py-1 dark:bg-white/[0.03]">
                 <span className="text-gray-700 dark:text-gray-300">{x.text}</span>{" "}
-                <span className="text-gray-500">
+                <span className="text-gray-500 dark:text-gray-400">
                   ({x.kind}, removed by {x.by === "code" ? "code check" : "verifier"}: {x.reason})
                 </span>
               </li>

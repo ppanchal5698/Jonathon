@@ -70,7 +70,29 @@
   }
 
   :focus-visible {
-    @apply outline-2 outline-offset-2 outline-brand-500;
+    @apply outline-2 outline-offset-2 outline-brand-500 dark:outline-brand-400;
+  }
+
+  /* Sticky header: keep the keyboard-focused element and #anchors clear of it (WCAG 2.4.11). */
+  html {
+    scroll-padding-top: 5rem;
+  }
+
+  summary {
+    @apply cursor-pointer rounded-sm;
+  }
+}
+
+/* Users who ask for less motion get no shimmer, spin or slide; state changes still happen, just instantly.
+   Unlayered on purpose: it then wins over Tailwind's layered utilities without !important. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.01ms;
+    scroll-behavior: auto;
   }
 }
 
@@ -78,14 +100,15 @@
 @utility menu-item {
   @apply relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-theme-sm font-medium;
 }
+/* Active items use brand-600 text on brand-50 (5.8:1); brand-500 there measured 4.34:1. */
 @utility menu-item-active {
-  @apply bg-brand-50 text-brand-500 dark:bg-brand-500/[0.12] dark:text-brand-400;
+  @apply bg-brand-50 text-brand-600 dark:bg-brand-500/[0.12] dark:text-brand-400;
 }
 @utility menu-item-inactive {
-  @apply text-gray-700 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-white/5 dark:hover:text-gray-300;
+  @apply text-gray-700 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-white/5 dark:hover:text-white;
 }
 @utility menu-item-icon-active {
-  @apply text-brand-500 dark:text-brand-400;
+  @apply text-brand-600 dark:text-brand-400;
 }
 @utility menu-item-icon-inactive {
   @apply text-gray-500 group-hover:text-gray-700 dark:text-gray-400 dark:group-hover:text-gray-300;
@@ -94,7 +117,7 @@
   @apply relative flex items-center gap-3 rounded-lg px-3 py-2 text-theme-sm font-medium;
 }
 @utility menu-dropdown-item-active {
-  @apply bg-brand-50 text-brand-500 dark:bg-brand-500/[0.12] dark:text-brand-400;
+  @apply bg-brand-50 text-brand-600 dark:bg-brand-500/[0.12] dark:text-brand-400;
 }
 @utility menu-dropdown-item-inactive {
   @apply text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/5;

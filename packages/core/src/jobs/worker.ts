@@ -1,7 +1,7 @@
 import type { JobStatus, JobType } from "@jonathon/contracts";
-import { type Db, run } from "../db";
+import { type Db, leaseFence, run } from "../db";
 import type { Logger } from "../logger";
-import { AppError, newId, nowIso, sleep, toAppError } from "../util";
+import { AppError, isAppError, newId, nowIso, sleep, toAppError } from "../util";
 import type { ClaimedJob, JobQueue } from "./queue";
 
 export interface JobContext {
@@ -14,16 +14,36 @@ export interface JobContext {
 export type JobOutcome = { status: Exclude<JobStatus, "queued" | "running" | "retrying" | "failed" | "cancelled">; result: unknown };
 export type JobHandler = (ctx: JobContext) => Promise<JobOutcome>;
 
+/**
+ * Wall-clock deadline per job attempt. When it passes, the handler's AbortSignal fires (the AI runtime kills its
+ * process tree), and the attempt fails with JOB_TIMEOUT, which is retryable with backoff.
+ */
+export const DEFAULT_JOB_DEADLINES_MS: Record<JobType, number> = {
+  ingest: 10 * 60_000,
+  answer: 15 * 60_000,
+  extract_knowledge: 45 * 60_000,
+  reindex: 30 * 60_000,
+  reconcile: 30 * 60_000,
+  graph_extract: 45 * 60_000,
+  generate_documents: 60 * 60_000,
+  import_folder: 3 * 60 * 60_000,
+};
+
 export interface WorkerOptions {
   concurrency: number;
   leaseMs?: number;
   pollMs?: number;
   types?: JobType[];
+  /** Per-type deadlines (merged over DEFAULT_JOB_DEADLINES_MS). */
+  deadlinesMs?: Partial<Record<JobType, number>>;
+  /** Hard cap applied to every type (JONATHON_JOB_DEADLINE_MS). */
+  maxDeadlineMs?: number;
 }
 
 /**
- * Polls the durable queue, runs handlers with an AbortSignal, renews leases, honours cancellation
- * and releases jobs on shutdown.
+ * Polls the durable queue, runs handlers with an AbortSignal, renews leases, honours cancellation and deadlines,
+ * and releases jobs on shutdown. Each handler runs inside the lease fence (db.leaseFence), so its transactions are
+ * refused once this worker no longer holds the job's lease.
  */
 export class JobWorker {
   readonly workerId = newId("wrk");
@@ -44,6 +64,11 @@ export class JobWorker {
     this.pollMs = opts.pollMs ?? 500;
   }
 
+  deadlineFor(type: JobType): number {
+    const d = this.opts.deadlinesMs?.[type] ?? DEFAULT_JOB_DEADLINES_MS[type] ?? 30 * 60_000;
+    return this.opts.maxDeadlineMs ? Math.min(d, this.opts.maxDeadlineMs) : d;
+  }
+
   start(): void {
     const recovered = this.queue.recoverExpiredLeases();
     if (recovered) this.log.warn({ recovered }, "requeued jobs from a worker that stopped");
@@ -60,6 +85,10 @@ export class JobWorker {
 
   get activeJobs(): number {
     return this.running.size;
+  }
+
+  get isStopping(): boolean {
+    return this.stopping;
   }
 
   private async mainLoop(): Promise<void> {
@@ -88,48 +117,70 @@ export class JobWorker {
     const controller = new AbortController();
     this.running.set(job.id, controller);
     const log = this.log.child({ job_id: job.id, job_type: job.type, attempt: job.attempt, correlation_id: job.correlationId });
-    const beat = setInterval(() => {
-      try {
-        const hb = this.queue.heartbeat(job.id, this.workerId, this.leaseMs);
-        if (hb.cancelRequested && !controller.signal.aborted) controller.abort(new AppError("JOB_CANCELLED", "cancelled by request"));
-        if (!hb.owned && !controller.signal.aborted) controller.abort(new AppError("JOB_CANCELLED", "lease lost"));
-      } catch (e) {
-        log.warn({ err: (e as Error).message }, "heartbeat failed");
-      }
-    }, Math.min(1_000, this.leaseMs / 3));
+    const abort = (code: "JOB_CANCELLED" | "LEASE_LOST" | "JOB_TIMEOUT", message: string) => {
+      if (!controller.signal.aborted) controller.abort(new AppError(code, message));
+    };
+    const beat = setInterval(
+      () => {
+        try {
+          const hb = this.queue.heartbeat(job.id, this.workerId, this.leaseMs);
+          if (hb.cancelRequested) abort("JOB_CANCELLED", "cancelled by request");
+          if (!hb.owned) abort("LEASE_LOST", "lease lost; another worker may own this job now");
+        } catch (e) {
+          log.warn({ err: (e as Error).message }, "heartbeat failed");
+        }
+      },
+      Math.min(1_000, this.leaseMs / 3),
+    );
+    const deadlineMs = this.deadlineFor(job.type);
+    const deadline = setTimeout(() => abort("JOB_TIMEOUT", `job exceeded its ${Math.round(deadlineMs / 1000)} s deadline`), deadlineMs);
     const started = Date.now();
     try {
       const handler = this.handlers[job.type];
       if (!handler) throw new AppError("INTERNAL", `no handler for ${job.type}`);
       log.info("job started");
-      const outcome = await handler({
-        job,
-        signal: controller.signal,
-        progress: (stage, detail) => this.queue.setProgress(job.id, stage, detail),
-        log,
-      });
-      if (controller.signal.aborted) throw new AppError("JOB_CANCELLED", "cancelled");
-      this.queue.complete(job.id, this.workerId, outcome.status, outcome.result);
-      log.info({ status: outcome.status, duration_ms: Date.now() - started }, "job finished");
+      const outcome = await leaseFence.run({ jobId: job.id, workerId: this.workerId }, () =>
+        handler({
+          job,
+          signal: controller.signal,
+          progress: (stage, detail) => this.queue.setProgress(job.id, stage, detail, this.workerId),
+          log,
+        }),
+      );
+      if (controller.signal.aborted) throw controller.signal.reason;
+      if (this.queue.complete(job.id, this.workerId, outcome.status, outcome.result)) {
+        log.info({ status: outcome.status, duration_ms: Date.now() - started }, "job finished");
+      } else {
+        log.warn({ duration_ms: Date.now() - started }, "lease lost before completion; result discarded");
+      }
     } catch (e) {
-      if (this.stopping && !(e instanceof AppError && e.code !== "JOB_CANCELLED")) {
+      const reason = controller.signal.aborted ? controller.signal.reason : undefined;
+      const err = isAppError(reason) ? reason : controller.signal.aborted ? new AppError("JOB_CANCELLED", "cancelled") : toAppError(e);
+      if (this.stopping && err.code === "JOB_CANCELLED") {
         this.queue.release(job.id, this.workerId);
         log.warn("job released on shutdown");
+      } else if (err.code === "LEASE_LOST") {
+        // Another worker (or lease recovery) owns the job now; fail() would be refused anyway. Record nothing more.
+        this.queue.fail(job.id, this.workerId, err.code, err.message);
+        log.warn({ duration_ms: Date.now() - started }, "lease lost; this worker's results were not committed");
       } else {
-        const err = controller.signal.aborted ? new AppError("JOB_CANCELLED", "cancelled") : toAppError(e);
         const status = this.queue.fail(job.id, this.workerId, err.code, err.message);
         log[status === "retrying" ? "warn" : "error"]({ code: err.code, err: err.message, status, duration_ms: Date.now() - started }, "job did not succeed");
       }
     } finally {
       clearInterval(beat);
+      clearTimeout(deadline);
       this.running.delete(job.id);
     }
   }
 
-  /** Abort running jobs, wait for them to settle, and stop polling. */
+  /**
+   * Stop claiming, abort running jobs (their runtimes kill their process trees), wait for them to settle and release
+   * them back to the queue, then remove this worker's heartbeat row so the UI shows "worker not running" at once.
+   */
   async stop(timeoutMs = 10_000): Promise<void> {
     this.stopping = true;
-    for (const c of this.running.values()) c.abort(new AppError("JOB_CANCELLED", "worker shutdown"));
+    for (const c of this.running.values()) if (!c.signal.aborted) c.abort(new AppError("JOB_CANCELLED", "worker shutdown"));
     const deadline = Date.now() + timeoutMs;
     while (this.running.size > 0 && Date.now() < deadline) await sleep(50);
     await this.loop;

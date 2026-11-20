@@ -1,4 +1,4 @@
-import { accessSync, constants, cpSync, mkdirSync, statfsSync } from "node:fs";
+import { accessSync, constants, statfsSync } from "node:fs";
 import { join } from "node:path";
 import { audit } from "../audit";
 import { all, hasFts5, one, run, tx } from "../db";
@@ -7,8 +7,12 @@ import { deleteAllChunks } from "../retrieval/indexer";
 import { assertHuman, type Principal } from "../security/principal";
 import type { ReconcileReport } from "../storage/knowledge-store";
 import { AppError, nowIso } from "../util";
+import { createBackup } from "./backup";
 import { type Ctx, requireProject } from "./context";
 import type { SourceService } from "./sources";
+
+/** A worker whose last heartbeat is older than this is reported as not running. */
+const WORKER_STALE_MS = 60_000;
 
 export class OpsService {
   constructor(
@@ -53,7 +57,13 @@ export class OpsService {
               meta.created_at,
             );
           } else {
-            run(this.ctx.db, "UPDATE sources SET current_revision_id = ? WHERE id = ? AND (SELECT revision_number FROM source_revisions WHERE id = current_revision_id) < ?", meta.revision_id, meta.source_id, meta.revision_number);
+            run(
+              this.ctx.db,
+              "UPDATE sources SET current_revision_id = ? WHERE id = ? AND (SELECT revision_number FROM source_revisions WHERE id = current_revision_id) < ?",
+              meta.revision_id,
+              meta.source_id,
+              meta.revision_number,
+            );
           }
           this.sources.insertRevisionRow(meta);
           const ex = this.ctx.files.readExtraction(pid, meta.source_id, meta.revision_id);
@@ -69,7 +79,13 @@ export class OpsService {
             );
             this.sources.indexRevision({ id: meta.revision_id, project_id: pid, source_id: meta.source_id }, meta.display_name, ex.chunks);
           } else {
-            this.ctx.queue.enqueue({ projectId: pid, type: "ingest", payload: { revision_id: meta.revision_id }, createdBy: "system:ops", idempotencyKey: `ingest:${meta.revision_id}` });
+            this.ctx.queue.enqueue({
+              projectId: pid,
+              type: "ingest",
+              payload: { revision_id: meta.revision_id },
+              createdBy: "system:ops",
+              idempotencyKey: `ingest:${meta.revision_id}`,
+            });
           }
         });
         revisions++;
@@ -81,13 +97,19 @@ export class OpsService {
   /** Reconcile one or all projects: complete crash intents, import external edits, flag missing files. */
   reconcile(principal: Principal, projectId?: string): ReconcileReport[] {
     if (principal.kind === "mcp_token") throw new AppError("FORBIDDEN", "not allowed");
-    const ids = projectId ? [requireProject(this.ctx, principal, projectId, "write").id] : all<{ id: string }>(this.ctx.db, "SELECT id FROM projects").map((r) => r.id);
+    const ids = projectId
+      ? [requireProject(this.ctx, principal, projectId, "write").id]
+      : all<{ id: string }>(this.ctx.db, "SELECT id FROM projects").map((r) => r.id);
     const reports = ids.map((id) => this.ctx.store.reconcile(id, principal));
     audit(this.ctx.db, {
       principal,
       projectId: projectId ?? null,
       action: "ops.reconciled",
-      details: { projects: ids.length, edits: reports.reduce((n, r) => n + r.external_edits.length, 0), invalid: reports.reduce((n, r) => n + r.invalid_files.length, 0) },
+      details: {
+        projects: ids.length,
+        edits: reports.reduce((n, r) => n + r.external_edits.length, 0),
+        invalid: reports.reduce((n, r) => n + r.invalid_files.length, 0),
+      },
     });
     return reports;
   }
@@ -122,18 +144,34 @@ export class OpsService {
   }
 
   /**
-   * Consistent backup: SQLite via VACUUM INTO (operational state that cannot be rebuilt) plus a copy of the
-   * projects/ tree (authoritative knowledge and originals). Not encrypted.
+   * Online backup: SQLite snapshot via VACUUM INTO (taken first), then projects/, then a manifest with every file's
+   * SHA-256. See services/backup.ts for the recovery-point rules; the offline variant is scripts/backup.ts.
    */
-  backup(principal: Principal): { path: string; created_at: string } {
+  backup(principal: Principal): { path: string; created_at: string; files: number } {
     assertHuman(principal);
     const stamp = nowIso().replace(/[:.]/g, "-");
     const dir = join(this.ctx.config.dataDir, "backups", stamp);
-    mkdirSync(dir, { recursive: true });
-    this.ctx.db.exec(`VACUUM INTO '${join(dir, "jonathon.sqlite").replace(/'/g, "''")}'`);
-    cpSync(join(this.ctx.config.dataDir, "projects"), join(dir, "projects"), { recursive: true, errorOnExist: false, verbatimSymlinks: true });
-    audit(this.ctx.db, { principal, action: "ops.backup_created", details: { path: `backups/${stamp}` } });
-    return { path: dir, created_at: stamp };
+    const m = createBackup(this.ctx.db, this.ctx.config.dataDir, dir, "online");
+    audit(this.ctx.db, { principal, action: "ops.backup_created", details: { path: `backups/${stamp}`, files: m.files.length, mode: "online" } });
+    return { path: dir, created_at: stamp, files: m.files.length };
+  }
+
+  /** Readiness for container health checks: the database answers and the data directory is writable. */
+  readiness(): { ready: boolean; database: boolean; storage: boolean } {
+    let database = false;
+    let storage = false;
+    try {
+      database = one<{ ok: number }>(this.ctx.db, "SELECT 1 AS ok")?.ok === 1;
+    } catch {
+      database = false;
+    }
+    try {
+      accessSync(this.ctx.config.dataDir, constants.W_OK);
+      storage = true;
+    } catch {
+      storage = false;
+    }
+    return { ready: database && storage, database, storage };
   }
 
   health(): Record<string, unknown> {
@@ -147,18 +185,23 @@ export class OpsService {
       storageOk = false;
     }
     const worker = one<{ last_seen_at: string }>(this.ctx.db, "SELECT last_seen_at FROM worker_heartbeats ORDER BY last_seen_at DESC LIMIT 1");
-    const workerAlive = !!worker && Date.now() - Date.parse(worker.last_seen_at) < 15_000;
+    // The worker writes its heartbeat from its job loop (every 0.5 s), so CPU-bound steps (parsing a large file,
+    // rebuilding a big project's memory graph) pause it for several seconds. 15 s flagged a busy worker as stopped;
+    // a cleanly stopped worker deletes its row, so only a crash or hang takes this long to show.
+    const workerAlive = !!worker && Date.now() - Date.parse(worker.last_seen_at) < WORKER_STALE_MS;
     const runtime = one<{ status: string; checked_at: string; details: string }>(this.ctx.db, "SELECT * FROM integration_health WHERE name = 'runtime'");
     const failed = one<{ n: number }>(this.ctx.db, "SELECT COUNT(*) AS n FROM jobs WHERE status = 'failed'")!.n;
+    const deadLetters = one<{ n: number }>(this.ctx.db, "SELECT COUNT(*) AS n FROM dead_letters WHERE replayed_at IS NULL")!.n;
     const queued = one<{ n: number }>(this.ctx.db, "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','retrying','running')")!.n;
     return {
       status: storageOk && workerAlive ? "ok" : "degraded",
       mode: this.ctx.config.mode,
+      deployment: this.ctx.config.container ? "docker" : "local",
       database: { ok: true, fts5: hasFts5(this.ctx.db) },
       storage: { ok: storageOk, free_bytes: freeBytes },
       worker: { alive: workerAlive, last_seen_at: worker?.last_seen_at ?? null },
       runtime: runtime ? { status: runtime.status, checked_at: runtime.checked_at, ...JSON.parse(runtime.details) } : { status: "unchecked" },
-      jobs: { failed, active: queued },
+      jobs: { failed, active: queued, dead_letters: deadLetters },
     };
   }
 

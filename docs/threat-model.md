@@ -35,6 +35,7 @@ Trust boundaries:
 | 19 | **Client documents in Git** | The data root defaults to `%LOCALAPPDATA%\Jonathon`, and Jonathon refuses a data root inside the repository. `.gitignore` excludes `data/`, `.env`, `*.sqlite`. There is no Git versioning of client data. | |
 | 20 | **Generated documents and the memory graph presented as client requirements** | Generated documents label every item (client-stated, from client material, knowledge with its review status, AI proposal, gap, human). Facts need valid citations and numbers found in what they cite; a verifier removes unsupported items and unconfirmed facts become proposals. Graph concepts need their name in a cited passage, AI relations a verbatim quote. Documents are approved only by a human with a typed phrase, per revision and content hash; MCP tools for documents and the graph are read-only. Edited sections are never overwritten. | A verified paraphrase can still be imperfect; approval is the control. Tests: documents.test.ts. |
 | 21 | **Copies of client content outside the source folders** | Generated documents (`documents/`), graph extractions and `graph/graph.json` live in the project folder under the data root (never the repository). They are derived data: deleting a source rebuilds them without it, and old document revisions stay in `documents/history/`. The graphify CLI can read `graph.json` locally; Jonathon never runs graphify's `extract`, which would send content to a second model provider. | Deleting a source does not purge it from earlier document revisions in history (same as knowledge history). |
+| 22 | **Folder import reading the host** | Only a human session can scan or import (MCP has no route, the worker cannot start one). The folder must be an absolute path to an existing directory, not a link or junction, and not inside Jonathon's data root or source repository; links and junctions inside it are listed but never followed, and every file path is re-resolved under the root with each component checked. The import job re-scans and accepts only paths the scan offers. Limits on files, bytes, depth and entries. Each import is audited (`source.folder_imported`). | The person can still point it at any folder they can read (by design: it is their machine). Check after scan, read at import (TOCTOU) is the same trust level as #6. Tests: folder-import.test.ts. |
 
 ## Known gaps
 
@@ -42,3 +43,17 @@ Trust boundaries:
   A future `agy` version could change that behaviour. `pnpm run doctor` warns when the version differs from 1.5.9, and `pnpm test:live` re-verifies it.
 * Single-user design: there are no roles beyond the local account and MCP token scopes.
 * No rate limiting beyond login lockout and bounded worker concurrency.
+
+## Docker deployment (see docker.md)
+
+* Host exposure is loopback only (`127.0.0.1:3005` UI, `127.0.0.1:4100` MCP). Inside the Compose network the API listens on
+  `0.0.0.0`, which config allows only inside a detected container. Host-header allowlisting still blocks DNS rebinding;
+  `trustProxy` stays off.
+* The UI container has no data, import or backup mounts. API and worker get `/data` (read-write) and `/imports`
+  (read-only, the only place folder import accepts, with real-path checks against links and traversal).
+* Containers run as uid 1000 with a read-only root filesystem, no capabilities, `no-new-privileges`, and no Docker socket.
+* Images contain no secrets or client data (`.dockerignore` excludes `.env*`, databases, keys and tests). No telemetry
+  (`NEXT_TELEMETRY_DISABLED=1`).
+* Gap: live AI is not containerized. A containerized `agy` inside the worker would share the worker's read-write view of all
+  client files; the proposed isolated runner (no data mounts) is not built yet.
+* Gap: the MCP port also serves `/api/v1` on loopback (still guarded by session cookie, CSRF and Origin checks).

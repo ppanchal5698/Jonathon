@@ -1,13 +1,16 @@
-import { createApp, loadConfig, loadDotEnv } from "@jonathon/core";
+import { assertDataDirReady, createApp, loadConfig, loadDotEnv } from "@jonathon/core";
 import { buildServer } from "./server";
 
 /** API + MCP server. Binds to loopback by default. The worker is a separate process (worker.ts). */
 async function main() {
   loadDotEnv();
   const config = loadConfig();
+  assertDataDirReady(config);
   const app = createApp(config);
   const log = app.ctx.log;
   if (config.mode === "demo") log.warn("DEMO MODE: no AI runtime is used; answers are extractive and labelled demo-extractive");
+  const deletes = app.projects.recoverInterruptedDeletes();
+  if (deletes.restored.length || deletes.purged.length) log.warn(deletes, "recovered interrupted project deletions");
   const completed = app.ctx.store.completeIntents();
   if (completed.length) log.warn({ completed }, "completed interrupted knowledge writes");
   const server = await buildServer(app);

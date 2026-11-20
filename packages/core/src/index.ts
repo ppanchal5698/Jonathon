@@ -23,3 +23,5 @@ export * from "./util";
 export * from "./services/graph";
 export * from "./services/documents";
 export * from "./docs/catalogue";
+export * from "./services/folder-import";
+export * from "./services/backup";

@@ -12,7 +12,7 @@ const EnvSchema = z.object({
   JONATHON_DATA_DIR: z.string().optional(),
   JONATHON_HOST: z.string().default("127.0.0.1"),
   JONATHON_PORT: z.coerce.number().int().default(4100),
-  JONATHON_WEB_ORIGINS: z.string().default("http://127.0.0.1:3000,http://localhost:3000"),
+  JONATHON_WEB_ORIGINS: z.string().default("http://127.0.0.1:3005,http://localhost:3005"),
   JONATHON_SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(12),
   JONATHON_MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(500).default(50),
   JONATHON_ASK_WAIT_MS: z.coerce.number().int().min(0).max(60_000).default(25_000),
@@ -20,6 +20,48 @@ const EnvSchema = z.object({
   JONATHON_ALLOW_REMOTE: bool.default(false),
   JONATHON_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(2),
   JONATHON_PARSER_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
+  /** Queue reliability (see docs/operations.md, "Job queue"). */
+  JONATHON_JOB_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(3),
+  JONATHON_JOB_BACKOFF_BASE_MS: z.coerce.number().int().min(100).max(600_000).default(2_000),
+  JONATHON_JOB_BACKOFF_MAX_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(24 * 3_600_000)
+    .default(300_000),
+  JONATHON_MAX_ACTIVE_JOBS: z.coerce.number().int().min(10).max(1_000_000).default(10_000),
+  JONATHON_JOB_LEASE_MS: z.coerce.number().int().min(5_000).max(600_000).default(30_000),
+  /** Optional hard cap on every job's deadline (each type has its own default; see jobs/worker.ts). */
+  JONATHON_JOB_DEADLINE_MS: z.coerce
+    .number()
+    .int()
+    .min(10_000)
+    .max(24 * 3_600_000)
+    .optional(),
+  /**
+   * Container deployments only. The API must listen on 0.0.0.0 inside its container so the web container can reach
+   * it; host exposure is decided by the Compose port binding (127.0.0.1 only). Honoured only when a container marker
+   * file exists (/.dockerenv or /run/.containerenv), so it cannot open a bare-metal install to the network.
+   */
+  JONATHON_CONTAINER: bool.default(false),
+  /** Extra Host header values the API answers to (e.g. the internal service name "server:4100" used by the web proxy). */
+  JONATHON_ALLOWED_HOSTS: z.string().default(""),
+  /** MCP URL shown when a token is created (the host-side address when the port is remapped, e.g. in Docker). */
+  JONATHON_MCP_PUBLIC_URL: z
+    .string()
+    .regex(/^https?:\/\/[^\s/]+\/mcp$/)
+    .optional(),
+  /**
+   * Folder import allowlist: comma-separated absolute directories. When set, only folders inside one of them can be
+   * scanned or imported. Containers set this to the read-only import mount (/imports).
+   */
+  JONATHON_IMPORT_ROOTS: z.string().default(""),
+  /**
+   * Refuse to start unless the data directory already holds Jonathon's marker file (.jonathon-data). Prevents a missing
+   * bind mount from silently starting an empty installation. The one-shot init service creates the marker only when
+   * JONATHON_INIT_NEW_DATA_DIR=true is given explicitly.
+   */
+  JONATHON_REQUIRE_EXISTING_DATA: bool.default(false),
 
   AGY_PATH: z.string().default("agy"),
   AGY_MODEL: z
@@ -62,6 +104,12 @@ export type JonathonConfig = {
   logLevel: z.infer<typeof EnvSchema>["JONATHON_LOG_LEVEL"];
   workerConcurrency: number;
   parserTimeoutMs: number;
+  queue: { maxAttempts: number; backoffBaseMs: number; backoffMaxMs: number; maxActiveJobs: number; leaseMs: number; maxDeadlineMs: number | undefined };
+  container: boolean;
+  allowedHosts: string[];
+  mcpPublicUrl: string;
+  importRoots: string[];
+  requireExistingData: boolean;
   runtime: {
     agyPath: string;
     /** Extra leading args; used by tests to run a fixture script through `node`. */
@@ -106,6 +154,14 @@ export function defaultDataDir(): string {
   return join(xdg && isAbsolute(xdg) ? xdg : join(homedir(), ".local", "share"), "jonathon");
 }
 
+/** True inside a Docker or Podman container. */
+export function isContainer(): boolean {
+  return existsSync("/.dockerenv") || existsSync("/run/.containerenv");
+}
+
+/** Marker written into a data directory that Jonathon initialised on purpose (see JONATHON_REQUIRE_EXISTING_DATA). */
+export const DATA_DIR_MARKER = ".jonathon-data";
+
 function isInside(child: string, parent: string): boolean {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -121,11 +177,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, repoRoot = find
         "Choose another directory (the default is your user data folder).",
     );
   }
-  if (!e.JONATHON_ALLOW_REMOTE && !["127.0.0.1", "localhost", "::1"].includes(e.JONATHON_HOST)) {
-    throw new Error(
-      `JONATHON_HOST=${e.JONATHON_HOST} is not loopback. Set JONATHON_ALLOW_REMOTE=true only behind a TLS reverse proxy.`,
-    );
+  const container = e.JONATHON_CONTAINER && isContainer();
+  if (e.JONATHON_CONTAINER && !container) {
+    throw new Error("JONATHON_CONTAINER=true is only valid inside a container (no /.dockerenv or /run/.containerenv found).");
   }
+  const loopback = ["127.0.0.1", "localhost", "::1"].includes(e.JONATHON_HOST);
+  const containerBind = container && ["0.0.0.0", "::"].includes(e.JONATHON_HOST);
+  if (!e.JONATHON_ALLOW_REMOTE && !loopback && !containerBind) {
+    throw new Error(`JONATHON_HOST=${e.JONATHON_HOST} is not loopback. Set JONATHON_ALLOW_REMOTE=true only behind a TLS reverse proxy.`);
+  }
+  const importRoots = e.JONATHON_IMPORT_ROOTS.split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  for (const r of importRoots) if (!isAbsolute(r)) throw new Error(`JONATHON_IMPORT_ROOTS entry "${r}" must be an absolute path`);
+  const allowedHosts = e.JONATHON_ALLOWED_HOSTS.split(",")
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
+  for (const h of allowedHosts)
+    if (!/^[a-z0-9.-]+(:\d{1,5})?$|^\[[0-9a-f:]+\](:\d{1,5})?$/.test(h)) throw new Error(`JONATHON_ALLOWED_HOSTS entry "${h}" is not a host[:port]`);
   return {
     mode: e.JONATHON_MODE,
     repoRoot,
@@ -143,6 +212,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, repoRoot = find
     logLevel: e.JONATHON_LOG_LEVEL,
     workerConcurrency: e.JONATHON_WORKER_CONCURRENCY,
     parserTimeoutMs: e.JONATHON_PARSER_TIMEOUT_MS,
+    queue: {
+      maxAttempts: e.JONATHON_JOB_MAX_ATTEMPTS,
+      backoffBaseMs: e.JONATHON_JOB_BACKOFF_BASE_MS,
+      backoffMaxMs: Math.max(e.JONATHON_JOB_BACKOFF_MAX_MS, e.JONATHON_JOB_BACKOFF_BASE_MS),
+      maxActiveJobs: e.JONATHON_MAX_ACTIVE_JOBS,
+      leaseMs: e.JONATHON_JOB_LEASE_MS,
+      maxDeadlineMs: e.JONATHON_JOB_DEADLINE_MS,
+    },
+    container,
+    allowedHosts,
+    mcpPublicUrl: e.JONATHON_MCP_PUBLIC_URL ?? `http://127.0.0.1:${e.JONATHON_PORT}/mcp`,
+    importRoots: importRoots.map((r) => resolve(r)),
+    requireExistingData: e.JONATHON_REQUIRE_EXISTING_DATA,
     runtime: {
       agyPath: e.AGY_PATH,
       agyArgsPrefix: e.JONATHON_ALLOW_TEST_HOOKS && e.AGY_ARGS_PREFIX_JSON ? z.array(z.string()).parse(JSON.parse(e.AGY_ARGS_PREFIX_JSON)) : [],
@@ -163,4 +245,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, repoRoot = find
       historyTurns: e.JONATHON_HISTORY_TURNS,
     },
   };
+}
+
+/**
+ * Startup guard for deployments where the data directory is a mount (Docker). When JONATHON_REQUIRE_EXISTING_DATA is
+ * on, refuse to run against a directory that does not carry the marker: an unmounted or mistyped volume would
+ * otherwise start an empty installation silently, and the user would believe their data was gone.
+ */
+export function assertDataDirReady(config: JonathonConfig): void {
+  if (!config.requireExistingData) return;
+  if (!existsSync(join(config.dataDir, DATA_DIR_MARKER))) {
+    throw new Error(
+      `Data directory ${config.dataDir} has no ${DATA_DIR_MARKER} marker. The data mount is missing or points to the wrong folder. ` +
+        "Check JONATHON_HOST_DATA_DIR, or initialise a NEW data directory once with the init service and JONATHON_INIT_NEW_DATA_DIR=true.",
+    );
+  }
 }

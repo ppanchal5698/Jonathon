@@ -14,6 +14,7 @@ import { AnswerService } from "./services/answering";
 import { type Ctx, requireProject } from "./services/context";
 import { DocumentService, queueDocsRefresh } from "./services/documents";
 import { ExtractionService } from "./services/extraction";
+import { FolderImportService } from "./services/folder-import";
 import { GraphService } from "./services/graph";
 import { KnowledgeService } from "./services/knowledge";
 import { OpsService } from "./services/ops";
@@ -31,6 +32,7 @@ export interface JonathonApp {
   answers: AnswerService;
   extraction: ExtractionService;
   graph: GraphService;
+  folders: FolderImportService;
   documents: DocumentService;
   ops: OpsService;
   search(
@@ -72,7 +74,12 @@ export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRun
   const runtime = opts.runtime ?? createRuntime(config, log);
   const store = new KnowledgeStore(db, config.dataDir, log);
   const files = new ProjectFiles(config.dataDir);
-  const queue = new JobQueue(db);
+  const queue = new JobQueue(db, {
+    defaultMaxAttempts: config.queue.maxAttempts,
+    backoffBaseMs: config.queue.backoffBaseMs,
+    backoffMaxMs: config.queue.backoffMaxMs,
+    maxActiveJobs: config.queue.maxActiveJobs,
+  });
   const auth = new AuthService(db, config.sessionTtlHours);
   const ctx: Ctx = { config, db, log, store, files, queue, runtime, auth };
   const projects = new ProjectService(ctx);
@@ -81,6 +88,7 @@ export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRun
   const answers = new AnswerService(ctx);
   const extraction = new ExtractionService(ctx);
   const graph = new GraphService(ctx);
+  const folders = new FolderImportService(ctx, sources);
   const documents = new DocumentService(ctx, graph);
   // Any committed knowledge change (drafting, review, edits, deletion) refreshes the generated documents, debounced.
   store.onChanged = (projectId) => queueDocsRefresh(ctx, projectId, "knowledge changed");
@@ -95,6 +103,7 @@ export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRun
     answers,
     extraction,
     graph,
+    folders,
     documents,
     ops,
     search(principal, projectId, body) {
@@ -125,10 +134,15 @@ export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRun
         reindex: (jc) => ops.runReindexJob(jc),
         graph_extract: (jc) => graph.runGraphExtractJob(jc),
         generate_documents: (jc) => documents.runGenerateJob(jc),
+        import_folder: (jc) => folders.runImportJob(jc),
       };
     },
     startWorker(concurrency = config.workerConcurrency) {
-      const w = new JobWorker(db, queue, app.jobHandlers(), log.child({ component: "worker" }), { concurrency });
+      const w = new JobWorker(db, queue, app.jobHandlers(), log.child({ component: "worker" }), {
+        concurrency,
+        leaseMs: config.queue.leaseMs,
+        maxDeadlineMs: config.queue.maxDeadlineMs,
+      });
       w.start();
       return w;
     },

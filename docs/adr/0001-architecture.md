@@ -19,7 +19,7 @@ for Claude Code. See `docs/compatibility.md` for verified versions.
 |---|---|---|
 | API + MCP server (Fastify) | `apps/server/src/main.ts` | `127.0.0.1:4100` |
 | Worker (ingestion, answering, extraction jobs) | `apps/server/src/worker.ts` | none |
-| Web UI (Next.js App Router) | `apps/web` | `127.0.0.1:3000` |
+| Web UI (Next.js App Router) | `apps/web` | `127.0.0.1:3005` |
 
 The worker lives in `apps/server` as a second entry point instead of a separate `apps/worker`
 package. Both entry points compose the same `@jonathon/core` services, so HTTP routes, MCP tools

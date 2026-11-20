@@ -8,9 +8,11 @@ All times in the UI are shown in IST (Asia/Kolkata), 12-hour clock.
 |---|---|---|
 | API + MCP | `pnpm --filter @jonathon/server start` | `http://127.0.0.1:4100` (`/api/v1`, `/mcp`) |
 | Worker | `pnpm --filter @jonathon/server start:worker` | none (polls SQLite) |
-| UI | `pnpm --filter @jonathon/web start` | `http://127.0.0.1:3000` |
+| UI | `pnpm --filter @jonathon/web start` | `http://127.0.0.1:3005` |
 
 `pnpm dev` runs all three in watch mode, and `pnpm start` runs them in production mode after `pnpm build`.
+Docker Compose (demo mode) is documented in [docker.md](docker.md), which also covers the job queue, dead letters, replay,
+Idempotency-Key, and `pnpm backup` / `pnpm restore` (verified backups with a manifest, which also work outside Docker).
 
 If the worker is not running, uploads stay `queued` and questions return `pending`. The dashboard shows the worker heartbeat.
 
@@ -75,6 +77,23 @@ Knowledge files are plain Markdown with YAML frontmatter, so you can edit them i
 Open the document and choose **Delete this document…**, then type `delete <name>`. This removes all revisions' originals and
 extractions, their chunks and index entries, and marks dependent knowledge and answers stale. It cannot remove copies in
 earlier backups, in Antigravity's transcript store (`~/.gemini/antigravity-cli/`), or at the model provider.
+
+## Deleting a project
+
+Open the project, go to **Settings**, choose **Delete this project…** and type `delete <project name>`
+(API: `DELETE /api/v1/projects/:pid` with `{"confirmation": "delete <project name>"}`, signed-in session and CSRF token;
+MCP tokens and the worker cannot do it). It removes the project folder (originals, extractions, knowledge files and
+history, specifications, generated documents, graph data), its runtime workspace, and every database row of the
+project: sources, search index, knowledge, approvals, conversations and answers, jobs and dead letters. MCP tokens lose
+the project from their scope, and a token limited to that project is revoked. The audit log keeps a `project.deleted`
+entry (who, when, name, counts; no document text). It cannot be undone, and it cannot remove copies in earlier backups,
+in Antigravity's transcript store, or at the model provider.
+
+The delete is refused while one of the project's jobs is running (the jobs are asked to stop; try again a few seconds
+later). It is crash-safe: under SQLite's write lock the folders are moved to `staging/deleted-projects/<id>/` and the rows
+are deleted in one transaction. If the transaction fails, the folders move back. If the process stops before the staged
+folders are removed, the API or worker finishes the removal at its next start, or restores the folders when the project
+still exists in the database.
 
 ## Troubleshooting
 

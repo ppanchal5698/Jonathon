@@ -54,8 +54,26 @@ export function isAppError(e: unknown): e is AppError {
   return e instanceof AppError;
 }
 
+/** Disk full, quota exceeded, read-only or busy storage: transient from the job's point of view (an operator can fix it). */
+const STORAGE_ERRNO = new Set(["ENOSPC", "EDQUOT", "EROFS", "EBUSY", "EMFILE", "ENFILE"]);
+
+export function isStorageFailure(e: unknown): boolean {
+  for (let cur: unknown = e, depth = 0; cur && depth < 5; cur = (cur as { cause?: unknown }).cause, depth++) {
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === "string" && STORAGE_ERRNO.has(code)) return true;
+    const msg = cur instanceof Error ? cur.message : "";
+    if (/database or disk is full|SQLITE_FULL|SQLITE_BUSY|database is locked|disk I\/O error/i.test(msg)) return true;
+  }
+  return false;
+}
+
 export function toAppError(e: unknown): AppError {
-  if (isAppError(e)) return e;
+  if (isAppError(e)) {
+    if (e.code === "INTERNAL" && isStorageFailure(e.cause))
+      return new AppError("STORAGE_UNAVAILABLE", "storage is full or unavailable", { cause: e, retryable: true });
+    return e;
+  }
+  if (isStorageFailure(e)) return new AppError("STORAGE_UNAVAILABLE", "storage is full or unavailable", { cause: e, retryable: true });
   const msg = e instanceof Error ? e.message : String(e);
   return new AppError("INTERNAL", msg, { cause: e });
 }

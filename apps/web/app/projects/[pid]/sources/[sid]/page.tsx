@@ -5,7 +5,23 @@ import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { DocumentIcon } from "@/components/icons";
 import { Shell } from "@/components/shell";
-import { Badge, Button, Card, ConfirmPhrase, cx, ErrorBanner, Loading, Notice, PageHeader, Time } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  buttonClass,
+  Card,
+  ConfirmPhrase,
+  cx,
+  Empty,
+  ErrorBanner,
+  Notice,
+  PageHeader,
+  PageSkeleton,
+  Pagination,
+  Skeleton,
+  Time,
+  usePaged,
+} from "@/components/ui";
 import { type ApiError, api, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
@@ -33,9 +49,11 @@ function SourceBody() {
   const [confirm, setConfirm] = useState("");
   const [showDelete, setShowDelete] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const chunkPage = usePaged(chunks.data?.chunks, 20, revisionId);
+  const revPage = usePaged(source.data?.revisions, 5);
 
   if (source.error) return <ErrorBanner error={source.error} />;
-  if (!source.data) return <Loading />;
+  if (!source.data) return <PageSkeleton label="document" />;
   const s = source.data;
   const current = s.revisions?.find((r) => r.id === revisionId) ?? s.current;
   const crumbs = [
@@ -56,33 +74,37 @@ function SourceBody() {
         <div className="col-span-12 space-y-4 md:space-y-6 xl:col-span-4">
           <Card title="Revisions">
             <ul className="space-y-3">
-              {s.revisions?.map((r) => (
+              {revPage.items.map((r) => (
                 <li key={r.id}>
                   <div
                     className={cx(
                       "rounded-xl border p-4 transition-colors",
-                      r.id === revisionId ? "border-brand-300 bg-brand-25 dark:border-brand-800 dark:bg-brand-500/[0.08]" : "border-gray-200 dark:border-gray-800",
+                      r.id === revisionId
+                        ? "border-brand-300 bg-brand-25 dark:border-brand-800 dark:bg-brand-500/[0.08]"
+                        : "border-gray-200 dark:border-gray-800",
                     )}
                   >
-                    <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setRev(r.id)} aria-current={r.id === revisionId ? "true" : undefined}>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-md text-left"
+                      onClick={() => setRev(r.id)}
+                      aria-current={r.id === revisionId ? "true" : undefined}
+                    >
                       <span className="font-medium text-gray-800 dark:text-white/90">Revision {r.revision_number}</span>
                       {r.id === s.current_revision_id && <Badge tone="success">current</Badge>}
                     </button>
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-theme-xs text-gray-500 dark:text-gray-400">
                       <Badge>{r.extraction_status}</Badge> {(r.size_bytes / 1024).toFixed(1)} KB · <Time iso={r.created_at} />
                     </div>
-                    <p className="mt-2 font-mono text-[10px] break-all text-gray-500 dark:text-gray-400">sha256 {r.content_hash}</p>
-                    <a
-                      className="mt-3 inline-flex h-8 items-center rounded-lg px-3 text-theme-xs font-medium text-gray-700 ring-1 ring-gray-300 ring-inset hover:bg-gray-50 dark:text-gray-300 dark:ring-gray-700 dark:hover:bg-white/5"
-                      href={`/api/v1/projects/${pid}/revisions/${r.id}/original`}
-                      download
-                    >
+                    <p className="mt-2 font-mono text-theme-xs break-all text-gray-500 dark:text-gray-400">sha256 {r.content_hash}</p>
+                    <a className={buttonClass("secondary", "sm", "mt-3")} href={`/api/v1/projects/${pid}/revisions/${r.id}/original`} download>
                       Download original
                     </a>
                   </div>
                 </li>
               ))}
             </ul>
+            <Pagination paged={revPage} label="Revisions" sizes={[5, 10, 20]} />
           </Card>
           {current && (
             <Card title="Extraction" desc={current.extractor ? `Extractor: ${current.extractor}` : undefined}>
@@ -96,7 +118,9 @@ function SourceBody() {
                     </ul>
                   </Notice>
                 )}
-                {current.extraction_status === "needs_ocr" && <Notice tone="warning">This file needs OCR, which is not configured. It is preserved but not searchable.</Notice>}
+                {current.extraction_status === "needs_ocr" && (
+                  <Notice tone="warning">This file needs OCR, which is not configured. It is preserved but not searchable.</Notice>
+                )}
                 {current.extraction_status === "unsupported" && (
                   <Notice>Jonathon cannot read this format. It is preserved and listed, but nothing in it is treated as understood.</Notice>
                 )}
@@ -116,7 +140,7 @@ function SourceBody() {
                   </Button>
                 )}
                 {notice && (
-                  <p role="status" className="text-theme-sm text-green-600 dark:text-green-500">
+                  <p role="status" className="text-theme-sm text-green-700 dark:text-green-400">
                     {notice}
                   </p>
                 )}
@@ -131,8 +155,8 @@ function SourceBody() {
             ) : (
               <div className="space-y-4">
                 <Notice tone="warning">
-                  Removes every revision&apos;s original, extraction and search index for this document. Knowledge that cited it is flagged stale. Backups made earlier still contain it, and
-                  Jonathon cannot delete copies the model provider or Antigravity may hold.
+                  Removes every revision&apos;s original, extraction and search index for this document. Knowledge that cited it is flagged stale. Backups made
+                  earlier still contain it, and Jonathon cannot delete copies the model provider or Antigravity may hold.
                 </Notice>
                 <ConfirmPhrase phrase={`delete ${s.display_name}`} value={confirm} onChange={setConfirm} />
                 <div className="flex gap-3">
@@ -159,30 +183,44 @@ function SourceBody() {
           </Card>
           <ErrorBanner error={error} />
         </div>
-        <Card title={`Extracted text (${chunks.data?.chunks.length ?? 0} chunks)`} desc="What retrieval and the model see, with the location of every passage." className="col-span-12 xl:col-span-8">
-          {chunks.loading ? (
-            <Loading />
-          ) : chunks.data?.chunks.length ? (
-            <ol className="space-y-3">
-              {chunks.data.chunks.map((c) => (
-                <li key={c.chunk_id} id={c.chunk_id} className="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
-                  <p className="mb-2 flex flex-wrap items-center gap-2 text-theme-xs text-gray-500 dark:text-gray-400">
-                    <span className="rounded-md bg-gray-100 px-1.5 py-0.5 font-mono dark:bg-white/5">#{c.ordinal}</span>
-                    {c.heading && <span className="font-medium text-gray-700 dark:text-gray-300">{c.heading}</span>}
-                    <span>
-                      {Object.entries(c.locator)
-                        .map(([k, v]) => `${k} ${v}`)
-                        .join(", ")}
-                    </span>
-                  </p>
-                  <pre className="font-sans text-theme-sm whitespace-pre-wrap text-gray-700 dark:text-gray-300">{c.text}</pre>
-                </li>
+        <Card
+          title={`Extracted text (${chunks.data?.chunks.length ?? 0} chunks)`}
+          desc="What retrieval and the model see, with the location of every passage."
+          className="col-span-12 xl:col-span-8"
+        >
+          {chunks.loading || (!chunks.data && revisionId) ? (
+            <div className="space-y-3" role="status" aria-label="Loading extracted text">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="space-y-2.5 rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+                  <Skeleton className="h-3 w-40" />
+                  <Skeleton className="h-3.5 w-11/12" />
+                  <Skeleton className="h-3.5 w-4/5" />
+                  <Skeleton className="h-3.5 w-2/3" />
+                </div>
               ))}
-            </ol>
-          ) : (
-            <div className="flex items-center gap-2 text-theme-sm text-gray-500">
-              <DocumentIcon className="size-5" /> No extracted text for this revision.
             </div>
+          ) : chunks.data?.chunks.length ? (
+            <>
+              <ol className="space-y-3">
+                {chunkPage.items.map((c) => (
+                  <li key={c.chunk_id} id={c.chunk_id} className="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+                    <p className="mb-2 flex flex-wrap items-center gap-2 text-theme-xs text-gray-500 dark:text-gray-400">
+                      <span className="rounded-md bg-gray-100 px-1.5 py-0.5 font-mono dark:bg-white/5">#{c.ordinal}</span>
+                      {c.heading && <span className="font-medium text-gray-700 dark:text-gray-300">{c.heading}</span>}
+                      <span>
+                        {Object.entries(c.locator)
+                          .map(([k, v]) => `${k} ${v}`)
+                          .join(", ")}
+                      </span>
+                    </p>
+                    <pre className="font-sans text-theme-sm whitespace-pre-wrap text-gray-700 dark:text-gray-300">{c.text}</pre>
+                  </li>
+                ))}
+              </ol>
+              <Pagination paged={chunkPage} label="Extracted text" />
+            </>
+          ) : (
+            <Empty title="No extracted text for this revision" icon={<DocumentIcon />} />
           )}
         </Card>
       </div>

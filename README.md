@@ -15,6 +15,9 @@ storage, permissions, conversations and approvals.
   contract, data model, threat model, CI/CD, test strategy ...) generated from the project's material and knowledge. Every
   item is labelled client-stated, from client material, knowledge, AI proposal or gap. Documents update themselves when
   material is added or removed, never overwrite a section you edited, and are approved per revision.
+* **Folder import**: give the path of a folder (for example a client's shared drive copy) on the Documents tab; Jonathon
+  scans it, lets you untick sub-folders or files, and imports the rest in the background. Importing the same folder again
+  adds only new files and new revisions of changed ones.
 * **Memory graph**: every document, passage, requirement, question, conflict, concept and generated document of a project
   in one graph, also written as graphify-compatible `graph/graph.json` for the graphify CLI.
 
@@ -26,6 +29,16 @@ storage, permissions, conversations and approvals.
 | Node.js | 24.x (24.20.0 verified) | uses built-in `node:sqlite` with FTS5, so no native build tools |
 | pnpm | 12.16.1 | `corepack enable` |
 | Antigravity CLI `agy` | 1.5.9 verified | sign in once by running `agy` interactively |
+
+## Docker (demo mode)
+
+```powershell
+copy docker\compose.env.example docker\compose.env   # first start of a new install: JONATHON_INIT_NEW_DATA_DIR=true
+docker compose --env-file docker/compose.env up -d --build
+```
+
+UI on <http://localhost:3005>, MCP on `http://127.0.0.1:4100/mcp`, both loopback only. Live AI is not containerized yet.
+See [docs/docker.md](docs/docker.md) and the audit in [docs/deployment-audit.md](docs/deployment-audit.md).
 
 ## Setup
 
@@ -41,7 +54,7 @@ pnpm run doctor
 pnpm dev
 ```
 
-Open <http://127.0.0.1:3000>, create the local account, and read the data-sharing notice. Create a project (leave "Draft
+Open <http://127.0.0.1:3005>, create the local account, and read the data-sharing notice. Create a project (leave "Draft
 requirements from uploaded documents with AI" ticked if you want automatic drafts), upload documents, then work through **Review**.
 
 Optional fictional demo project (after the account exists):

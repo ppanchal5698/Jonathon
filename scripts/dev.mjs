@@ -15,7 +15,7 @@ const prod = process.argv.includes("--prod");
 const isWin = process.platform === "win32";
 const pnpm = isWin ? "pnpm.cmd" : "pnpm";
 
-const WEB_PORT = /^\d{2,5}$/.test(process.env.JONATHON_WEB_PORT ?? "") ? process.env.JONATHON_WEB_PORT : "3000";
+const WEB_PORT = /^\d{2,5}$/.test(process.env.JONATHON_WEB_PORT ?? "") ? process.env.JONATHON_WEB_PORT : "3005";
 const API_PORT = /^\d{2,5}$/.test(process.env.JONATHON_PORT ?? "") ? process.env.JONATHON_PORT : "4100";
 
 const procs = [

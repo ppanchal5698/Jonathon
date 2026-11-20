@@ -3,7 +3,25 @@
 import { DOC_CATEGORIES, type DocBlock, type DocSection, type GeneratedDocument } from "@jonathon/contracts";
 import { useState } from "react";
 import { Modal } from "@/components/review";
-import { A, Badge, Button, Card, ConfirmPhrase, cx, ErrorBanner, Loading, Notice, table, Textarea, Time } from "@/components/ui";
+import {
+  A,
+  Badge,
+  Button,
+  buttonClass,
+  Card,
+  CardSkeleton,
+  ConfirmPhrase,
+  cx,
+  ErrorBanner,
+  Notice,
+  Pagination,
+  Skeleton,
+  TableSkeleton,
+  table,
+  Textarea,
+  Time,
+  usePaged,
+} from "@/components/ui";
 import { type ApiError, api, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
@@ -83,7 +101,17 @@ export function TechDocs({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
   if (cat.error) return <ErrorBanner error={cat.error} />;
-  if (!cat.data) return <Loading />;
+  if (!cat.data)
+    return (
+      <div className="space-y-6">
+        <CardSkeleton lines={5} label="technical documentation" />
+        {[0, 1].map((i) => (
+          <CardSkeleton key={i} label="document category">
+            <TableSkeleton rows={4} cols={4} label="documents" />
+          </CardSkeleton>
+        ))}
+      </div>
+    );
   const docs = cat.data.documents;
   const mustHave = docs.filter((d) => d.must_have);
   const generated = docs.filter((d) => d.generated);
@@ -115,10 +143,7 @@ export function TechDocs({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }
               Generate all {docs.length}
             </Button>
             {generated.length > 0 && (
-              <a
-                className="inline-flex items-center rounded-lg px-4 py-2.5 text-theme-sm font-medium text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-500/[0.12]"
-                href={`/api/v1/projects/${pid}/documents-export`}
-              >
+              <a className={buttonClass("ghost")} href={`/api/v1/projects/${pid}/documents-export`}>
                 Download all (Markdown)
               </a>
             )}
@@ -192,7 +217,7 @@ export function TechDocs({ pid, aiEnabled }: { pid: string; aiEnabled: boolean }
                             </div>
                           </div>
                         ) : (
-                          <span className="text-gray-400">not generated</span>
+                          <span className="text-gray-500 dark:text-gray-400">not generated</span>
                         )}
                       </td>
                       <td className={cx(table.td, "whitespace-nowrap")}>
@@ -240,7 +265,7 @@ function Refs({ pid, block }: { pid: string; block: DocBlock }) {
         return (
           <span key={`${r.kind}${r.id}`}>
             {i > 0 && "; "}
-            <a href={href} title={r.excerpt ?? r.status ?? undefined} className="text-brand-500 hover:underline">
+            <a href={href} title={r.excerpt ?? r.status ?? undefined} className="text-brand-600 hover:underline dark:text-brand-400">
               {r.kind === "entity" ? `${r.id}${r.status ? ` (${r.status})` : ""}` : r.label}
             </a>
           </span>
@@ -262,7 +287,7 @@ function BasisBadge({ b }: { b: DocBlock }) {
 export function Blocks({ pid, columns, blocks }: { pid: string; columns: string[]; blocks: DocBlock[] }) {
   const rows = columns.length ? blocks.filter((b) => b.kind === "fact" || b.kind === "proposal") : [];
   const rest = blocks.filter((b) => !rows.includes(b));
-  if (!blocks.length) return <p className="text-theme-sm text-gray-400">Nothing in the material for this section yet.</p>;
+  if (!blocks.length) return <p className="text-theme-sm text-gray-500 dark:text-gray-400">Nothing in the material for this section yet.</p>;
   return (
     <div className="space-y-3">
       {rows.length > 0 && (
@@ -308,14 +333,14 @@ export function Blocks({ pid, columns, blocks }: { pid: string; columns: string[
                 b.kind === "gap"
                   ? "border-orange-400 bg-orange-50/60 dark:bg-orange-500/[0.06]"
                   : b.kind === "proposal" || b.kind === "diagram"
-                    ? "border-warning-400 bg-warning-50/50 dark:bg-warning-500/[0.05]"
+                    ? "border-amber-400 bg-amber-50/60 dark:bg-amber-500/[0.06]"
                     : "border-gray-200 dark:border-gray-700",
               )}
             >
               {b.kind === "diagram" ? (
                 <>
-                  <pre className="overflow-x-auto rounded-md bg-gray-50 p-3 text-theme-xs dark:bg-white/[0.03]">{b.text}</pre>
-                  <p className="mt-1 text-theme-xs text-gray-500">
+                  <pre className="custom-scrollbar overflow-x-auto rounded-md bg-gray-50 p-3 text-theme-xs dark:bg-white/[0.03]">{b.text}</pre>
+                  <p className="mt-1 text-theme-xs text-gray-500 dark:text-gray-400">
                     Mermaid diagram: it renders in the downloaded Markdown on GitHub, VS Code and most Markdown viewers.
                   </p>
                 </>
@@ -359,8 +384,24 @@ export function DocumentView({ pid, doc }: { pid: string; doc: string }) {
   const [approving, setApproving] = useState(false);
   const [phrase, setPhrase] = useState("");
   const [showRemoved, setShowRemoved] = useState(false);
+  const removedPage = usePaged(view.data?.document?.removed, 20);
   if (view.error) return <ErrorBanner error={view.error} />;
-  if (!view.data) return <Loading />;
+  if (!view.data)
+    return (
+      <div className="space-y-6">
+        <CardSkeleton lines={3} label="document">
+          <div className="flex flex-wrap gap-2">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <Skeleton key={i} className="h-5 w-24 rounded-full" />
+            ))}
+          </div>
+        </CardSkeleton>
+        <CardSkeleton lines={4} label="section" />
+        <CardSkeleton label="section">
+          <TableSkeleton rows={4} cols={4} label="section table" />
+        </CardSkeleton>
+      </div>
+    );
   const { spec, document: d, approval } = view.data;
   const act = async (fn: () => Promise<unknown>) => {
     setError(null);
@@ -387,10 +428,7 @@ export function DocumentView({ pid, doc }: { pid: string; doc: string }) {
               {d ? "Regenerate" : "Generate"}
             </Button>
             {d && (
-              <a
-                className="inline-flex items-center rounded-lg px-4 py-2.5 text-theme-sm font-medium text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-500/[0.12]"
-                href={`/api/v1/projects/${pid}/documents/${doc}/markdown`}
-              >
+              <a className={buttonClass("ghost")} href={`/api/v1/projects/${pid}/documents/${doc}/markdown`}>
                 Download Markdown
               </a>
             )}
@@ -441,20 +479,22 @@ export function DocumentView({ pid, doc }: { pid: string; doc: string }) {
                   <Time iso={c.at} />
                   <span>{c.reasons.join("; ")}</span>
                 </div>
-                {c.sections_changed.length > 0 && <p className="mt-1 text-theme-xs text-gray-500">Sections: {c.sections_changed.join(", ")}</p>}
+                {c.sections_changed.length > 0 && (
+                  <p className="mt-1 text-theme-xs text-gray-500 dark:text-gray-400">Sections: {c.sections_changed.join(", ")}</p>
+                )}
                 {(c.added.length > 0 || c.removed.length > 0) && (
-                  <details className="mt-1 text-theme-xs text-gray-500">
+                  <details className="mt-1 text-theme-xs text-gray-500 dark:text-gray-400">
                     <summary className="cursor-pointer">
                       +{c.added.length} added, −{c.removed.length} removed
                     </summary>
                     <ul className="mt-1 space-y-0.5">
                       {c.added.map((x) => (
-                        <li key={`a${x}`} className="text-success-600">
+                        <li key={`a${x}`} className="text-green-700 dark:text-green-400">
                           + {x}
                         </li>
                       ))}
                       {c.removed.map((x) => (
-                        <li key={`r${x}`} className="text-error-600">
+                        <li key={`r${x}`} className="text-red-700 dark:text-red-400">
                           − {x}
                         </li>
                       ))}
@@ -562,13 +602,14 @@ export function DocumentView({ pid, doc }: { pid: string; doc: string }) {
           </Button>
           {showRemoved && (
             <ul className="mt-3 space-y-1 text-theme-sm text-gray-600 dark:text-gray-400">
-              {d.removed.map((r, i) => (
+              {removedPage.items.map((r, i) => (
                 <li key={i}>
                   {r.text.slice(0, 240)} — <em>{r.reason}</em>
                 </li>
               ))}
             </ul>
           )}
+          {showRemoved && <Pagination paged={removedPage} label="Removed items" />}
         </Card>
       )}
 

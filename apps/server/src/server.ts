@@ -6,10 +6,13 @@ import {
   CreateEntityBodySchema,
   CreateMcpTokenBodySchema,
   CreateProjectBodySchema,
+  DeleteProjectBodySchema,
   DeleteSourceBodySchema,
   DocReviewBodySchema,
   DocSectionUpdateBodySchema,
   EditDocSectionBodySchema,
+  FolderImportBodySchema,
+  FolderScanBodySchema,
   type EntityType,
   EntityTypeSchema,
   ERROR_HTTP_STATUS,
@@ -28,6 +31,7 @@ import { AppError, createMcpServer, type JonathonApp, requireProject, toAppError
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
+import { beginIdempotent, finishIdempotent } from "./idempotency";
 import { allowedHosts, checkHostAndOrigin, clearSessionCookie, readCookie, requireUser, SESSION_COOKIE, securityHeaders, sessionCookie } from "./security";
 
 const ok = <T>(data: T) => ({ data });
@@ -47,12 +51,16 @@ type P = { pid: string };
 export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   const { config, log } = app.ctx;
   const hosts = allowedHosts(config.port, config.webOrigins);
+  // Container deployments: the web container's proxy reaches the API by service name (e.g. server:4100).
+  for (const h of config.allowedHosts) hosts.add(h);
   const origins = new Set(config.webOrigins);
 
   const f = Fastify({
     loggerInstance: log.child({ component: "http" }) as unknown as FastifyBaseLogger,
     genReqId: () => `req_${randomUUID().slice(0, 12)}`,
     bodyLimit: 4 * 1024 * 1024,
+    // Never trust X-Forwarded-*: nothing in Jonathon's security decisions uses the client IP, and the only proxy (the
+    // Next.js frontend) is reached over an internal network. Origin, Host, session and CSRF checks use the real headers.
     trustProxy: false,
   });
   await f.register(multipart, { limits: { fileSize: config.maxUploadBytes, files: 20, fields: 10, parts: 30 } });
@@ -61,6 +69,10 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     reply.header("X-Correlation-Id", req.id);
     securityHeaders(reply);
     checkHostAndOrigin(req, hosts, origins);
+  });
+  f.addHook("onSend", async (req, reply, payload) => {
+    finishIdempotent(app, req, reply, payload);
+    return payload;
   });
 
   f.setErrorHandler((err, req, reply) => {
@@ -84,6 +96,12 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
 
   // ---------- public ----------
   f.get("/api/v1/health", async () => ok({ status: "ok" }));
+  // Readiness (container health checks): the database answers and the data directory is writable. No paths or details.
+  f.get("/api/v1/ready", async (_req, reply) => {
+    const r = app.ops.readiness();
+    if (!r.ready) reply.status(503);
+    return ok(r);
+  });
   f.get("/api/v1/setup/status", async (req) =>
     ok({
       set_up: app.auth.isSetUp(),
@@ -127,7 +145,10 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   });
 
   // ---------- authenticated (cookie) ----------
-  const authed = async (req: FastifyRequest) => requireUser(app, req);
+  const authed = async (req: FastifyRequest, reply: FastifyReply) => {
+    requireUser(app, req);
+    return beginIdempotent(app, req, reply);
+  };
 
   f.get("/api/v1/projects", { preHandler: authed }, async (req) => ok(app.projects.list(req.principal!)));
   f.post("/api/v1/projects", { preHandler: authed }, async (req) => ok(app.projects.create(req.principal!, parse(CreateProjectBodySchema, req.body))));
@@ -153,6 +174,10 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   f.patch<{ Params: P }>("/api/v1/projects/:pid", { preHandler: authed }, async (req) =>
     ok(app.projects.update(req.principal!, req.params.pid, parse(UpdateProjectBodySchema, req.body))),
   );
+  // Permanent: the whole project, its files and its rows (ProjectService.delete). Session + CSRF + typed phrase.
+  f.delete<{ Params: P }>("/api/v1/projects/:pid", { preHandler: authed }, async (req) =>
+    ok(app.projects.delete(req.principal!, req.params.pid, parse(DeleteProjectBodySchema, req.body).confirmation)),
+  );
   f.get<{ Params: P }>("/api/v1/projects/:pid/activity", { preHandler: authed }, async (req) => ok(app.projects.activity(req.principal!, req.params.pid)));
   f.get("/api/v1/activity", { preHandler: authed }, async (req) => ok(app.projects.activity(req.principal!, null, 30)));
 
@@ -175,6 +200,13 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     if (results.length === 0) throw new AppError("VALIDATION_FAILED", "no files were uploaded");
     return ok(results);
   });
+  // Folder import: scan shows what would be imported; import queues a background job. Human session only.
+  f.post<{ Params: P }>("/api/v1/projects/:pid/sources/folder/scan", { preHandler: authed }, async (req) =>
+    ok(app.folders.scan(req.principal!, req.params.pid, parse(FolderScanBodySchema, req.body))),
+  );
+  f.post<{ Params: P }>("/api/v1/projects/:pid/sources/folder/import", { preHandler: authed }, async (req) =>
+    ok(app.folders.queueImport(req.principal!, req.params.pid, parse(FolderImportBodySchema, req.body))),
+  );
   f.post<{ Params: P }>("/api/v1/projects/:pid/sources/paste", { preHandler: authed }, async (req) => {
     const b = parse(PasteTextBodySchema, req.body);
     return ok(
@@ -213,6 +245,8 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
         type: "extract_knowledge",
         payload: { revision_id: req.params.rid },
         serialKey: `extract:${p.id}`,
+        // A second click while the same draft extraction is still queued or running returns that job.
+        dedupeKey: `extract_knowledge:${req.params.rid}:${app.ctx.runtime.provider}`,
         createdBy: req.principal!.kind === "user" ? req.principal!.username : "user",
         correlationId: req.id,
       }),
@@ -383,18 +417,36 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     app.ctx.queue.getForProject(req.params.pid, req.params.jid);
     return ok(app.ctx.queue.requestCancel(req.params.jid));
   });
+  // Retry and replay share one path: human only, audited (job.replayed), safe to repeat.
   f.post<{ Params: P & { jid: string } }>("/api/v1/projects/:pid/jobs/:jid/retry", { preHandler: authed }, async (req) => {
     requireProject(app.ctx, req.principal!, req.params.pid, "write");
-    app.ctx.queue.getForProject(req.params.pid, req.params.jid);
-    return ok(app.ctx.queue.retry(req.params.jid));
+    return ok(app.ctx.queue.retry(req.principal!, req.params.jid, { projectId: req.params.pid, correlationId: req.id }));
   });
+  f.post<{ Params: P & { jid: string } }>("/api/v1/projects/:pid/jobs/:jid/replay", { preHandler: authed }, async (req) => {
+    requireProject(app.ctx, req.principal!, req.params.pid, "write");
+    return ok(app.ctx.queue.replay(req.principal!, req.params.jid, { projectId: req.params.pid, correlationId: req.id }));
+  });
+  f.get<{ Querystring: { project_id?: string; include_replayed?: string; limit?: string } }>(
+    "/api/v1/ops/dead-letters",
+    { preHandler: authed },
+    async (req) => {
+      if (req.query.project_id) requireProject(app.ctx, req.principal!, req.query.project_id, "read");
+      return ok(
+        app.ctx.queue.listDeadLetters({
+          projectId: req.query.project_id,
+          includeReplayed: req.query.include_replayed === "1",
+          limit: parse(z.coerce.number().int().min(1).max(500).default(100), req.query.limit),
+        }),
+      );
+    },
+  );
 
   // ----- MCP credentials -----
   f.get("/api/v1/mcp/tokens", { preHandler: authed }, async () => ok(app.auth.listMcpTokens()));
   f.post("/api/v1/mcp/tokens", { preHandler: authed }, async (req) => {
     const b = parse(CreateMcpTokenBodySchema, req.body);
     const t = app.auth.createMcpToken(req.principal!, { name: b.name, projectIds: b.project_ids, scopes: b.scopes, expiresInDays: b.expires_in_days });
-    return ok({ ...t, mcp_url: `http://127.0.0.1:${config.port}/mcp`, shown_once: true });
+    return ok({ ...t, mcp_url: config.mcpPublicUrl, shown_once: true });
   });
   f.post<{ Params: { id: string } }>("/api/v1/mcp/tokens/:id/revoke", { preHandler: authed }, async (req) => {
     app.auth.revokeMcpToken(req.principal!, req.params.id);
@@ -402,7 +454,7 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   });
   f.post<{ Params: { id: string } }>("/api/v1/mcp/tokens/:id/rotate", { preHandler: authed }, async (req) => {
     const t = app.auth.rotateMcpToken(req.principal!, req.params.id);
-    return ok({ ...t, mcp_url: `http://127.0.0.1:${config.port}/mcp`, shown_once: true });
+    return ok({ ...t, mcp_url: config.mcpPublicUrl, shown_once: true });
   });
   f.get<{ Params: { id: string } }>("/api/v1/mcp/tokens/:id/access", { preHandler: authed }, async (req) => ok(app.auth.mcpAccessLog(req.params.id)));
 

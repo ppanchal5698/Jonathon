@@ -5,13 +5,13 @@ import { useParams } from "next/navigation";
 import { Suspense } from "react";
 import { Shell } from "@/components/shell";
 import { DocumentView, type DocView } from "@/components/techdocs";
-import { Loading, PageHeader } from "@/components/ui";
+import { PageHeader, PageSkeleton } from "@/components/ui";
 import { useApi } from "@/lib/use-api";
 
 export default function GeneratedDocumentPage() {
   return (
     <Shell>
-      <Suspense fallback={<Loading />}>
+      <Suspense fallback={<PageSkeleton label="document" />}>
         <Body />
       </Suspense>
     </Shell>

@@ -7,7 +7,7 @@
 import type { Project, SearchHit } from "@jonathon/contracts";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { get, post, setCsrf } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import {
@@ -37,7 +37,7 @@ import {
   SunIcon,
 } from "./icons";
 import { useTheme } from "./theme";
-import { Badge, cx, Loading } from "./ui";
+import { Badge, buttonClass, cx, ListSkeleton, PageSkeleton, Skeleton, SkeletonText } from "./ui";
 
 interface Session {
   username: string;
@@ -83,31 +83,80 @@ export function Shell({ children }: { children: ReactNode }) {
     })();
   }, [router]);
 
+  const isDesktop = useMediaQuery("(min-width: 1280px)");
+
   // Close the mobile drawer on navigation.
   useEffect(() => setMobileOpen(false), [pathname]);
 
+  // Opening the drawer moves focus into it; Escape closes it.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    document.querySelector<HTMLElement>("#app-sidebar a")?.focus();
+    // On close, focus would be left inside the now-inert drawer: hand it back to the menu button.
+    const restore = () => {
+      const a = document.activeElement;
+      if (!a || a === document.body || document.getElementById("app-sidebar")?.contains(a))
+        document.querySelector<HTMLElement>('[aria-controls="app-sidebar"]')?.focus();
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMobileOpen(false);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      restore();
+    };
+  }, [mobileOpen]);
+
   if (!session) {
     return (
-      <main className="flex min-h-screen items-center justify-center">
-        <Loading label="Checking session" />
-      </main>
+      <div className="flex min-h-screen" role="status" aria-label="Checking session">
+        <span className="sr-only">Checking session…</span>
+        <aside
+          className="hidden w-[290px] shrink-0 space-y-4 border-r border-gray-200 bg-white px-5 py-8 lg:block dark:border-gray-800 dark:bg-gray-900"
+          aria-hidden="true"
+        >
+          <Skeleton className="h-8 w-36" />
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} className="h-9 w-full rounded-lg" />
+          ))}
+        </aside>
+        <div className="flex-1">
+          <div className="flex h-[73px] items-center gap-4 border-b border-gray-200 bg-white px-6 dark:border-gray-800 dark:bg-gray-900" aria-hidden="true">
+            <Skeleton className="h-10 w-full max-w-md rounded-lg" />
+            <Skeleton className="ml-auto size-10 rounded-full" />
+          </div>
+          <main className="mx-auto max-w-(--breakpoint-2xl) p-4 md:p-6">
+            <PageSkeleton label="page" />
+          </main>
+        </div>
+      </div>
     );
   }
 
   const showText = expanded || hovered || mobileOpen;
   return (
     <div className="min-h-screen xl:flex">
-      <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[99999] focus:rounded-lg focus:bg-white focus:p-2">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[99999] focus:rounded-lg focus:bg-white focus:px-4 focus:py-2 focus:text-theme-sm focus:font-medium focus:text-brand-600 focus:shadow-theme-lg dark:focus:bg-gray-800 dark:focus:text-white"
+      >
         Skip to content
       </a>
-      <Sidebar showText={showText} expanded={expanded} mobileOpen={mobileOpen} onHover={setHovered} />
+      {/* Off-canvas below xl: while closed it is inert, so Tab never lands on links that are off-screen. */}
+      <Sidebar showText={showText} expanded={expanded} mobileOpen={mobileOpen} hidden={!isDesktop && !mobileOpen} onHover={setHovered} />
       {mobileOpen && (
-        <button type="button" aria-label="Close menu" className="fixed inset-0 z-40 bg-gray-900/50 xl:hidden" onClick={() => setMobileOpen(false)} />
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label="Close menu"
+          className="fixed inset-0 z-40 bg-gray-900/50 xl:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
       )}
-      <div className={cx("flex min-w-0 flex-1 flex-col transition-all duration-300 ease-in-out", expanded ? "xl:ml-[290px]" : "xl:ml-[90px]")}>
+      <div className={cx("flex min-w-0 flex-1 flex-col transition-[margin] duration-300 ease-in-out", expanded ? "xl:ml-[290px]" : "xl:ml-[90px]")}>
         <Header
           session={session}
           mobileOpen={mobileOpen}
+          expanded={expanded}
           onToggle={() => {
             if (window.matchMedia("(min-width: 1280px)").matches) setExpanded((v) => !v);
             else setMobileOpen((v) => !v);
@@ -134,14 +183,42 @@ export function Shell({ children }: { children: ReactNode }) {
   );
 }
 
-function Sidebar({ showText, expanded, mobileOpen, onHover }: { showText: boolean; expanded: boolean; mobileOpen: boolean; onHover: (v: boolean) => void }) {
+/** True while the media query matches (false during the first render, before the browser is asked). */
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const update = () => setMatches(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, [query]);
+  return matches;
+}
+
+function Sidebar({
+  showText,
+  expanded,
+  mobileOpen,
+  hidden,
+  onHover,
+}: {
+  showText: boolean;
+  expanded: boolean;
+  mobileOpen: boolean;
+  hidden: boolean;
+  onHover: (v: boolean) => void;
+}) {
   return (
     <aside
+      id="app-sidebar"
       aria-label="Main navigation"
+      inert={hidden}
       onMouseEnter={() => !expanded && onHover(true)}
       onMouseLeave={() => onHover(false)}
       className={cx(
-        "fixed top-0 left-0 z-50 flex h-screen flex-col border-r border-gray-200 bg-white px-5 text-gray-900 transition-all duration-300 ease-in-out dark:border-gray-800 dark:bg-gray-900",
+        // Only size and position animate; colours switch instantly with the theme.
+        "fixed top-0 left-0 z-50 flex h-dvh flex-col border-r border-gray-200 bg-white px-5 text-gray-900 transition-[width,translate] duration-300 ease-in-out dark:border-gray-800 dark:bg-gray-900",
         showText ? "w-[290px]" : "w-[90px]",
         mobileOpen ? "translate-x-0" : "-translate-x-full xl:translate-x-0",
       )}
@@ -164,7 +241,12 @@ function Sidebar({ showText, expanded, mobileOpen, onHover }: { showText: boolea
 
 function GroupTitle({ showText, children }: { showText: boolean; children: string }) {
   return (
-    <h2 className={cx("mb-4 flex text-theme-xs leading-5 text-gray-400 uppercase", showText ? "justify-start" : "justify-center")}>
+    <h2
+      className={cx(
+        "mb-4 flex text-theme-xs leading-5 tracking-wide text-gray-500 uppercase dark:text-gray-400",
+        showText ? "justify-start" : "justify-center",
+      )}
+    >
       {showText ? children : <span aria-hidden="true">•••</span>}
       {!showText && <span className="sr-only">{children}</span>}
     </h2>
@@ -255,7 +337,7 @@ function SidebarNav({ showText }: { showText: boolean }) {
               </li>
             );
           })}
-          {projects.data?.length === 0 && showText && <li className="px-3 text-theme-sm text-gray-500">No projects yet.</li>}
+          {projects.data?.length === 0 && showText && <li className="px-3 text-theme-sm text-gray-500 dark:text-gray-400">No projects yet.</li>}
         </ul>
       </div>
       <div>
@@ -286,7 +368,7 @@ function StatusWidget() {
     <div className="mb-8 mt-auto rounded-2xl bg-gray-50 px-4 py-5 dark:bg-white/[0.03]">
       <p className="mb-3 text-theme-sm font-semibold text-gray-900 dark:text-white">System status</p>
       {!h ? (
-        <Loading />
+        <SkeletonText lines={4} label="system status" />
       ) : (
         <dl className="space-y-2 text-theme-sm">
           <div className="flex items-center justify-between">
@@ -302,55 +384,89 @@ function StatusWidget() {
           <div className="flex items-center justify-between">
             <dt className="text-gray-500 dark:text-gray-400">Jobs</dt>
             <dd className="text-gray-700 dark:text-gray-300">
-              {h.jobs.active} active{h.jobs.failed ? <span className="text-red-500"> · {h.jobs.failed} failed</span> : null}
+              {h.jobs.active} active{h.jobs.failed ? <span className="text-red-600 dark:text-red-400"> · {h.jobs.failed} failed</span> : null}
             </dd>
           </div>
         </dl>
       )}
-      <Link
-        href="/operations"
-        className="mt-4 flex h-9 items-center justify-center rounded-lg bg-brand-500 text-theme-sm font-medium text-white hover:bg-brand-600"
-      >
+      <Link href="/operations" className={buttonClass("primary", "md", "mt-4 w-full")}>
         Operations
       </Link>
     </div>
   );
 }
 
-function Header({ session, mobileOpen, onToggle, onSignOut }: { session: Session; mobileOpen: boolean; onToggle: () => void; onSignOut: () => void }) {
+const iconBtn =
+  "flex size-10 shrink-0 items-center justify-center border border-gray-200 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 lg:size-11 dark:border-gray-800 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white";
+
+function Header({
+  session,
+  mobileOpen,
+  expanded,
+  onToggle,
+  onSignOut,
+}: {
+  session: Session;
+  mobileOpen: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  onSignOut: () => void;
+}) {
   const { resolved, toggle } = useTheme();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const pathname = usePathname();
+  useEffect(() => setSearchOpen(false), [pathname]);
   return (
-    <header className="sticky top-0 z-30 flex w-full border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+    <header className="sticky top-0 z-30 w-full border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
       <div className="flex grow items-center justify-between gap-3 px-3 py-3 sm:gap-4 lg:px-6 lg:py-4">
         <div className="flex min-w-0 items-center gap-3">
           <button
             type="button"
             onClick={onToggle}
-            aria-label={mobileOpen ? "Close sidebar" : "Toggle sidebar"}
-            className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 lg:size-11 dark:border-gray-800 dark:text-gray-400 dark:hover:bg-white/5"
+            aria-controls="app-sidebar"
+            aria-expanded={mobileOpen || undefined}
+            aria-label={mobileOpen ? "Close sidebar" : expanded ? "Toggle sidebar" : "Expand sidebar"}
+            className={cx(iconBtn, "rounded-lg")}
           >
             {mobileOpen ? <CloseIcon className="size-6" /> : <MenuIcon className="size-6" />}
           </button>
-          <Link href="/" aria-label="Jonathon home" className="flex items-center gap-2 xl:hidden">
+          <Link href="/" aria-label="Jonathon home" className="flex items-center gap-2 rounded-lg xl:hidden">
             <LogoMark className="size-8" />
             <span className="hidden text-lg font-semibold sm:inline">Jonathon</span>
           </Link>
           <Suspense fallback={null}>
-            <HeaderSearch />
+            <HeaderSearch className="relative hidden lg:block" shortcut />
           </Suspense>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
           <button
             type="button"
+            onClick={() => setSearchOpen((v) => !v)}
+            aria-expanded={searchOpen}
+            aria-controls="mobile-search"
+            aria-label={searchOpen ? "Close search" : "Search"}
+            className={cx(iconBtn, "rounded-full lg:hidden")}
+          >
+            {searchOpen ? <CloseIcon className="size-5" /> : <SearchIcon className="size-5" />}
+          </button>
+          <button
+            type="button"
             onClick={toggle}
             aria-label={resolved === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            className="flex size-10 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 hover:bg-gray-100 hover:text-gray-700 lg:size-11 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+            className={cx(iconBtn, "rounded-full bg-white dark:bg-gray-900")}
           >
             {resolved === "dark" ? <SunIcon className="size-5" /> : <MoonIcon className="size-5" />}
           </button>
           <UserMenu username={session.username} onSignOut={onSignOut} />
         </div>
       </div>
+      {searchOpen && (
+        <div id="mobile-search" className="border-t border-gray-200 px-3 py-3 lg:hidden dark:border-gray-800">
+          <Suspense fallback={null}>
+            <HeaderSearch className="relative w-full" autoFocus onClose={() => setSearchOpen(false)} />
+          </Suspense>
+        </div>
+      )}
     </header>
   );
 }
@@ -370,17 +486,19 @@ function UserMenu({ username, onSignOut }: { username: string; onSignOut: () => 
       document.removeEventListener("keydown", close);
     };
   }, [open]);
+  // A disclosure (button + panel of ordinary links), not an ARIA menu: Tab moves through the two items and
+  // Escape or a click outside closes it.
   return (
     <div ref={ref} className="relative">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-haspopup="menu"
+        aria-controls="account-menu"
         aria-label={`Account menu for ${username}`}
-        className="flex items-center gap-2 text-gray-700 dark:text-gray-400"
+        className="flex items-center gap-2 rounded-full text-gray-700 dark:text-gray-300"
       >
-        <span className="flex size-10 items-center justify-center rounded-full bg-brand-50 text-theme-sm font-semibold text-brand-500 uppercase lg:size-11 dark:bg-brand-500/15 dark:text-brand-400">
+        <span className="flex size-10 items-center justify-center rounded-full bg-brand-50 text-theme-sm font-semibold text-brand-600 uppercase lg:size-11 dark:bg-brand-500/15 dark:text-brand-400">
           {username.slice(0, 2)}
         </span>
         <span className="hidden text-theme-sm font-medium sm:block">{username}</span>
@@ -388,28 +506,32 @@ function UserMenu({ username, onSignOut }: { username: string; onSignOut: () => 
       </button>
       {open && (
         <div
-          role="menu"
-          className="absolute right-0 mt-3 w-60 rounded-2xl border border-gray-200 bg-white p-3 shadow-theme-lg dark:border-gray-800 dark:bg-gray-900"
+          id="account-menu"
+          className="absolute right-0 z-50 mt-3 w-60 rounded-2xl border border-gray-200 bg-white p-3 shadow-theme-lg dark:border-gray-800 dark:bg-gray-900"
         >
           <div className="border-b border-gray-200 px-2 pb-3 dark:border-gray-800">
             <p className="font-medium text-gray-700 dark:text-gray-300">{username}</p>
             <p className="text-theme-xs text-gray-500 dark:text-gray-400">Local account</p>
           </div>
-          <Link
-            role="menuitem"
-            href="/setup"
-            className="mt-2 flex items-center gap-3 rounded-lg px-2 py-2 text-theme-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5"
-          >
-            <CpuIcon className="size-5" /> Setup & runtime
-          </Link>
-          <button
-            role="menuitem"
-            type="button"
-            onClick={onSignOut}
-            className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-theme-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5"
-          >
-            <LogoutIcon className="size-5" /> Sign out
-          </button>
+          <ul className="mt-2 space-y-0.5">
+            <li>
+              <Link
+                href="/setup"
+                className="flex h-10 items-center gap-3 rounded-lg px-2 text-theme-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/5"
+              >
+                <CpuIcon className="size-5" /> Setup & runtime
+              </Link>
+            </li>
+            <li>
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="flex h-10 w-full items-center gap-3 rounded-lg px-2 text-theme-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/5"
+              >
+                <LogoutIcon className="size-5" /> Sign out
+              </button>
+            </li>
+          </ul>
         </div>
       )}
     </div>
@@ -422,18 +544,35 @@ type Hit = SearchHit & { text?: string };
  * Ctrl+K search. Inside a project it searches that project's evidence and knowledge (same project-scoped search
  * the MCP tool uses); elsewhere it filters project names. Results are links; nothing is executed.
  */
-function HeaderSearch() {
+function HeaderSearch({
+  className,
+  shortcut = false,
+  autoFocus = false,
+  onClose,
+}: {
+  className: string;
+  shortcut?: boolean;
+  autoFocus?: boolean;
+  onClose?: () => void;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const pid = /^\/projects\/(prj_[0-9a-z]+)/.exec(pathname)?.[1] ?? null;
   const projects = useApi<Project[]>(pid ? null : "/projects");
+  const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listId = useId();
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [hits, setHits] = useState<Hit[]>([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (autoFocus) inputRef.current?.focus();
+  }, [autoFocus]);
+
+  useEffect(() => {
+    if (!shortcut) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -443,7 +582,7 @@ function HeaderSearch() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  }, [shortcut]);
 
   useEffect(() => {
     if (!pid || q.trim().length < 2) {
@@ -475,12 +614,40 @@ function HeaderSearch() {
   const go = (href: string) => {
     setOpen(false);
     setQ("");
+    onClose?.();
     router.push(href);
   };
 
+  /** Arrow keys move between the input and the result buttons; Escape returns to the input and closes. */
+  const results = () => [...(rootRef.current?.querySelectorAll<HTMLButtonElement>("[data-result]") ?? [])];
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const list = results();
+    const i = list.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (!list.length) return;
+      e.preventDefault();
+      const next = e.key === "ArrowDown" ? (i < 0 ? 0 : Math.min(i + 1, list.length - 1)) : i <= 0 ? -1 : i - 1;
+      (next < 0 ? inputRef.current : list[next])?.focus();
+    } else if (e.key === "Escape") {
+      setOpen(false);
+      inputRef.current?.focus();
+      if (!q) onClose?.();
+    }
+  };
+
   const showPanel = open && q.trim().length >= (pid ? 2 : 1);
+  const resultCls = "w-full rounded-lg px-3 py-2 text-left hover:bg-gray-100 focus-visible:bg-gray-100 dark:hover:bg-white/5 dark:focus-visible:bg-white/5";
   return (
-    <div className="relative hidden lg:block">
+    // biome-ignore lint/a11y/noStaticElementInteractions: keyboard handler for the arrow keys of the input and its result buttons
+    <div
+      ref={rootRef}
+      className={className}
+      onKeyDown={onKeyDown}
+      onBlur={(e) => {
+        // Close only when focus leaves the search entirely (not when it moves from the input to a result).
+        if (!rootRef.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
       <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-5 -translate-y-1/2 text-gray-500 dark:text-gray-400" />
       <input
         ref={inputRef}
@@ -491,41 +658,46 @@ function HeaderSearch() {
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
         onKeyDown={(e) => {
-          if (e.key === "Escape") setOpen(false);
           if (e.key === "Enter") {
             const first = pid ? hits[0] && hrefFor(hits[0]) : projectMatches[0] && `/projects/${projectMatches[0].id}`;
             if (first) go(first);
           }
         }}
         aria-label={pid ? "Search this project's evidence and knowledge" : "Find a project"}
+        aria-controls={showPanel ? listId : undefined}
         placeholder={pid ? "Search this project…" : "Find a project…"}
-        className="h-11 w-full rounded-lg border border-gray-200 bg-transparent py-2.5 pr-14 pl-12 text-theme-sm text-gray-800 shadow-theme-xs placeholder:text-gray-400 focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 focus:outline-hidden xl:w-[430px] dark:border-gray-800 dark:bg-white/[0.03] dark:text-white/90 dark:placeholder:text-white/30"
+        className={cx(
+          "h-11 w-full rounded-lg border border-gray-200 bg-transparent py-2.5 pl-12 text-theme-sm text-gray-800 shadow-theme-xs placeholder:text-gray-500 focus:border-brand-500 focus:ring-3 focus:ring-brand-500/20 focus:outline-hidden dark:border-gray-800 dark:bg-white/[0.03] dark:text-white/90 dark:placeholder:text-gray-400 dark:focus:border-brand-400",
+          shortcut ? "pr-16 xl:w-[430px]" : "pr-4",
+        )}
       />
-      <kbd className="pointer-events-none absolute top-1/2 right-2.5 inline-flex -translate-y-1/2 items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-[7px] py-[4.5px] text-theme-xs text-gray-500 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400">
-        Ctrl K
-      </kbd>
+      {shortcut && (
+        <kbd className="pointer-events-none absolute top-1/2 right-2.5 inline-flex -translate-y-1/2 items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-[7px] py-[4.5px] text-theme-xs text-gray-500 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400">
+          Ctrl K
+        </kbd>
+      )}
+      <p className="sr-only" aria-live="polite">
+        {showPanel && !busy ? `${pid ? hits.length : projectMatches.length} results. Use the down arrow to reach them.` : ""}
+      </p>
       {showPanel && (
-        <div className="absolute top-full left-0 z-50 mt-2 w-full overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-theme-lg xl:w-[520px] dark:border-gray-800 dark:bg-gray-900">
+        <div
+          id={listId}
+          className="absolute top-full left-0 z-50 mt-2 w-full overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-theme-lg xl:min-w-[520px] dark:border-gray-800 dark:bg-gray-900"
+        >
           {pid ? (
             busy && hits.length === 0 ? (
               <div className="p-4">
-                <Loading label="Searching" />
+                <ListSkeleton rows={3} label="search results" />
               </div>
             ) : hits.length === 0 ? (
-              <p className="p-4 text-theme-sm text-gray-500">No matches in this project.</p>
+              <p className="p-4 text-theme-sm text-gray-500 dark:text-gray-400">No matches in this project.</p>
             ) : (
-              <ul className="custom-scrollbar max-h-96 overflow-y-auto p-2">
+              <ul className="custom-scrollbar max-h-96 overflow-y-auto p-2" aria-label="Search results">
                 {hits.map((h) => (
                   <li key={h.chunk_id}>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => go(hrefFor(h))}
-                      className="w-full rounded-lg px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-white/5"
-                    >
-                      <span className="flex items-center gap-2">
+                    <button type="button" data-result onMouseDown={(e) => e.preventDefault()} onClick={() => go(hrefFor(h))} className={resultCls}>
+                      <span className="flex min-w-0 items-center gap-2">
                         <Badge tone={h.kind === "evidence" ? "gray" : h.approval_valid ? "success" : "warning"}>
                           {h.kind === "evidence" ? "source" : h.approval_valid ? "approved" : (h.status ?? h.entity_type)}
                         </Badge>
@@ -538,18 +710,19 @@ function HeaderSearch() {
               </ul>
             )
           ) : projectMatches.length === 0 ? (
-            <p className="p-4 text-theme-sm text-gray-500">No matching project.</p>
+            <p className="p-4 text-theme-sm text-gray-500 dark:text-gray-400">No matching project.</p>
           ) : (
-            <ul className="p-2">
+            <ul className="p-2" aria-label="Matching projects">
               {projectMatches.map((p) => (
                 <li key={p.id}>
                   <button
                     type="button"
+                    data-result
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => go(`/projects/${p.id}`)}
-                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-theme-sm hover:bg-gray-100 dark:hover:bg-white/5"
+                    className={cx(resultCls, "flex items-center gap-2 text-theme-sm text-gray-800 dark:text-white/90")}
                   >
-                    <FolderIcon className="size-5 text-gray-500" /> {p.name}
+                    <FolderIcon className="size-5 text-gray-500 dark:text-gray-400" /> {p.name}
                   </button>
                 </li>
               ))}
