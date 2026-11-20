@@ -106,6 +106,8 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     ok({
       set_up: app.auth.isSetUp(),
       mode: config.mode,
+      // "google": Sign in with Google is the only way in (no username/password).
+      auth: app.google.enabled ? "google" : "password",
       // The absolute data path is shown only before setup or to the signed-in user.
       data_dir: !app.auth.isSetUp() || app.auth.resolveSession(readCookie(req, SESSION_COOKIE)) ? config.dataDir : null,
       ai_notice:
@@ -113,7 +115,47 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     }),
   );
 
+  const passwordClosed = () => {
+    if (app.google.enabled) throw new AppError("FORBIDDEN", "this Jonathon uses Sign in with Google; passwords are turned off");
+  };
+
+  // ----- Sign in with Google (OpenID Connect). Start: same-origin navigation from the sign-in page. -----
+  const OAUTH_COOKIE = "jon_oauth";
+  const oauthCookie = (value: string, maxAge: number) =>
+    // Path=/ so the cookie also reaches a redirect URI outside /api/v1 (e.g. /oauth2callback on the UI origin).
+    `${OAUTH_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+  /** A tiny same-origin page that moves the browser on. A server redirect would keep the navigation "cross-site"
+   *  (it started at Google), and browsers then withhold the SameSite=Strict session cookie on the next page. */
+  const continuePage = (reply: FastifyReply, to: string) => {
+    reply.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+    reply.header("Content-Type", "text/html; charset=utf-8");
+    const href = to.replace(/[^\w\-./?=&%]/g, "");
+    return reply.send(
+      `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${href}"><title>Jonathon</title></head>` +
+        `<body><p>Continuing to <a href="${href}">Jonathon</a>…</p></body></html>`,
+    );
+  };
+  f.get("/api/v1/auth/google/start", async (_req, reply) => {
+    const { url, binder } = app.google.start();
+    reply.header("Set-Cookie", oauthCookie(binder, 600));
+    return reply.redirect(url, 302);
+  });
+  f.get<{ Querystring: { state?: string; code?: string; error?: string } }>("/api/v1/auth/google/callback", async (req, reply) => {
+    try {
+      const { token, created } = await app.google.callback(req.query, readCookie(req, OAUTH_COOKIE));
+      reply.header("Set-Cookie", [sessionCookie(token, config.sessionTtlHours * 3600), oauthCookie("", 0)]);
+      return continuePage(reply, created ? "/setup" : "/");
+    } catch (e) {
+      const err = toAppError(e);
+      req.log.info({ code: err.code }, "google sign-in failed");
+      reply.header("Set-Cookie", oauthCookie("", 0));
+      const msg = err.code === "INTERNAL" ? "sign-in failed" : err.message;
+      return continuePage(reply, `/login?error=${encodeURIComponent(msg.slice(0, 200))}`);
+    }
+  });
+
   f.post("/api/v1/setup/account", async (req, reply) => {
+    passwordClosed();
     const body = parse(SetupAccountBodySchema, req.body);
     await app.auth.createAccount(body.username, body.password);
     const { token, session } = await app.auth.login(body.username, body.password);
@@ -122,6 +164,7 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   });
 
   f.post("/api/v1/auth/login", async (req, reply) => {
+    passwordClosed();
     const body = parse(LoginBodySchema, req.body);
     if (!app.auth.isSetUp()) throw new AppError("SETUP_REQUIRED", "create the local account first");
     const { token, session } = await app.auth.login(body.username, body.password);
@@ -461,7 +504,22 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   // ----- operations -----
   f.get("/api/v1/ops/health", { preHandler: authed }, async () => ok(app.ops.health()));
   f.get<{ Querystring: { auth?: string } }>("/api/v1/ops/runtime", { preHandler: authed }, async (req) =>
-    ok(await app.ops.runtimeDiagnostics(req.query.auth === "1")),
+    // Docker: the API container has no agy; the worker answers (and runs the authentication check when asked).
+    ok(config.runtimeInWorker ? await app.runtimeAuth.diagnostics(req.principal!, req.query.auth === "1") : await app.ops.runtimeDiagnostics(req.query.auth === "1")),
+  );
+
+  // ----- Antigravity sign-in (Docker worker). Human session + CSRF only; MCP tokens never reach these routes. -----
+  f.get("/api/v1/runtime/auth", { preHandler: authed }, async (req) => ok(app.runtimeAuth.status(req.principal!)));
+  f.post("/api/v1/runtime/auth/sign-in", { preHandler: authed }, async (req) => ok(app.runtimeAuth.request(req.principal!, "sign_in", req.id)));
+  f.post("/api/v1/runtime/auth/sign-out", { preHandler: authed }, async (req) => ok(app.runtimeAuth.request(req.principal!, "sign_out", req.id)));
+  f.get<{ Params: { id: string } }>("/api/v1/runtime/auth/requests/:id", { preHandler: authed }, async (req) =>
+    ok(app.runtimeAuth.get(req.principal!, req.params.id)),
+  );
+  f.post<{ Params: { id: string } }>("/api/v1/runtime/auth/requests/:id/code", { preHandler: authed }, async (req) =>
+    ok(app.runtimeAuth.submitCode(req.principal!, req.params.id, parse(z.object({ code: z.string().min(1).max(600) }), req.body).code)),
+  );
+  f.post<{ Params: { id: string } }>("/api/v1/runtime/auth/requests/:id/cancel", { preHandler: authed }, async (req) =>
+    ok(app.runtimeAuth.cancel(req.principal!, req.params.id)),
   );
   f.post<{ Body: { project_id?: string } }>("/api/v1/ops/reconcile", { preHandler: authed }, async (req) =>
     ok(app.ops.reconcile(req.principal!, (req.body as { project_id?: string } | undefined)?.project_id)),

@@ -9,6 +9,7 @@ import { AntigravityCliRuntime } from "./runtime/antigravity";
 import { DemoExtractiveRuntime } from "./runtime/demo";
 import type { ReasoningRuntime } from "./runtime/types";
 import { AuthService } from "./security/auth";
+import { GoogleSignIn } from "./security/google-signin";
 import type { Principal } from "./security/principal";
 import { AnswerService } from "./services/answering";
 import { type Ctx, requireProject } from "./services/context";
@@ -19,6 +20,7 @@ import { GraphService } from "./services/graph";
 import { KnowledgeService } from "./services/knowledge";
 import { OpsService } from "./services/ops";
 import { ProjectService } from "./services/projects";
+import { RuntimeAuthAgent, RuntimeAuthService } from "./services/runtime-auth";
 import { SourceService } from "./services/sources";
 import { KnowledgeStore } from "./storage/knowledge-store";
 import { ProjectFiles } from "./storage/project-files";
@@ -26,6 +28,8 @@ import { ProjectFiles } from "./storage/project-files";
 export interface JonathonApp {
   ctx: Ctx;
   auth: AuthService;
+  /** Sign in with Google for the local account (enabled when JONATHON_GOOGLE_CLIENT_ID is set). */
+  google: GoogleSignIn;
   projects: ProjectService;
   sources: SourceService;
   knowledge: KnowledgeService;
@@ -35,6 +39,9 @@ export interface JonathonApp {
   folders: FolderImportService;
   documents: DocumentService;
   ops: OpsService;
+  runtimeAuth: RuntimeAuthService;
+  /** Docker worker with a dedicated agy home: performs sign-in / sign-out / check requests. */
+  startRuntimeAuthAgent(): RuntimeAuthAgent;
   search(
     principal: Principal,
     projectId: string,
@@ -68,7 +75,7 @@ export function createRuntime(config: JonathonConfig, log: Logger): ReasoningRun
 }
 
 /** Composition root shared by the API server, the MCP endpoint, the worker and the tests. */
-export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRuntime; log?: Logger; db?: Db } = {}): JonathonApp {
+export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRuntime; log?: Logger; db?: Db; fetch?: typeof fetch } = {}): JonathonApp {
   const log = opts.log ?? createLogger(config.logLevel, "jonathon");
   const db = opts.db ?? openDatabase(config.dbPath);
   const runtime = opts.runtime ?? createRuntime(config, log);
@@ -93,10 +100,13 @@ export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRun
   // Any committed knowledge change (drafting, review, edits, deletion) refreshes the generated documents, debounced.
   store.onChanged = (projectId) => queueDocsRefresh(ctx, projectId, "knowledge changed");
   const ops = new OpsService(ctx, sources);
+  const google = new GoogleSignIn(db, config, auth, opts.fetch);
+  const runtimeAuth = new RuntimeAuthService(ctx);
 
   const app: JonathonApp = {
     ctx,
     auth,
+    google,
     projects,
     sources,
     knowledge,
@@ -106,6 +116,12 @@ export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRun
     folders,
     documents,
     ops,
+    runtimeAuth,
+    startRuntimeAuthAgent() {
+      const agent = new RuntimeAuthAgent(ctx, ops, log.child({ component: "runtime-auth" }));
+      agent.start();
+      return agent;
+    },
     search(principal, projectId, body) {
       const p = requireProject(ctx, principal, projectId, "read");
       const hits = searchProject(db, projectId, body.query, { types: body.entity_types, statuses: body.status, limit: body.limit ?? 10 });

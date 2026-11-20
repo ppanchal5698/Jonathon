@@ -407,4 +407,47 @@ CREATE TABLE http_idempotency (
 CREATE INDEX http_idempotency_expiry ON http_idempotency(expires_at);
 `,
   },
+  {
+    id: "004_runtime_auth",
+    sql: `
+-- [SQLITE] Google sign-in / sign-out requests for the agy CLI in the Docker worker. The API writes a request; the
+-- worker runs agy and reports back. code holds the pasted one-time authorization code only until the worker consumes
+-- it (then NULL); auth_url is Google's sign-in link, shown only to the signed-in person while the request waits.
+CREATE TABLE runtime_auth_requests (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL CHECK (action IN ('sign_in','sign_out','check')),
+  status TEXT NOT NULL CHECK (status IN ('pending','running','awaiting_code','verifying','succeeded','failed','cancelled','expired')),
+  auth_url TEXT,
+  code TEXT,
+  detail TEXT,
+  error_code TEXT,
+  requested_by_id TEXT NOT NULL,
+  requested_by_name TEXT NOT NULL,
+  worker_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT
+) STRICT;
+CREATE INDEX runtime_auth_open ON runtime_auth_requests(status, created_at);
+`,
+  },
+  {
+    id: "005_google_sign_in",
+    sql: `
+-- [SQLITE] Sign in with Google for the local account. google_sub binds the single account to one Google identity.
+ALTER TABLE users ADD COLUMN google_sub TEXT;
+ALTER TABLE users ADD COLUMN email TEXT;
+CREATE UNIQUE INDEX users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL;
+
+-- [SQLITE] In-flight Google sign-ins (10 minutes). binder_hash ties the callback to the browser that started it (cookie).
+CREATE TABLE oauth_states (
+  state TEXT PRIMARY KEY,
+  binder_hash TEXT NOT NULL,
+  code_verifier TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+) STRICT;
+`,
+  },
 ];

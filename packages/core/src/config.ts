@@ -7,6 +7,9 @@ const bool = z
   .union([z.boolean(), z.string()])
   .transform((v) => (typeof v === "boolean" ? v : ["1", "true", "yes", "on"].includes(v.toLowerCase())));
 
+/** Docker Compose passes unset variables as "": treat that as not set. */
+const emptyAsUnset = z.string().optional().transform((v) => (v?.trim() ? v.trim() : undefined));
+
 const EnvSchema = z.object({
   JONATHON_MODE: z.enum(["live", "demo"]).default("live"),
   JONATHON_DATA_DIR: z.string().optional(),
@@ -62,6 +65,42 @@ const EnvSchema = z.object({
    * JONATHON_INIT_NEW_DATA_DIR=true is given explicitly.
    */
   JONATHON_REQUIRE_EXISTING_DATA: bool.default(false),
+  /** Docker: the API container has no agy; runtime diagnostics and authentication checks are answered by the worker. */
+  JONATHON_RUNTIME_IN_WORKER: bool.default(false),
+  /**
+   * Docker worker only: agy's $HOME, a volume Jonathon owns. Enables "Sign in with Google" / "Sign out" for agy. Honoured
+   * only inside a container, so Jonathon can never sign a person's own desktop agy out.
+   */
+  JONATHON_AGY_HOME: z.string().optional(),
+  /**
+   * Sign in with Google (OpenID Connect) for Jonathon itself. When a client id is set, Google is the ONLY way to sign in:
+   * the username/password routes are refused. Create a "Web application" OAuth client in Google Cloud Console with the
+   * redirect URI <JONATHON_PUBLIC_URL>/api/v1/auth/google/callback.
+   */
+  JONATHON_GOOGLE_CLIENT_ID: emptyAsUnset.pipe(
+    z
+      .string()
+      .regex(/^[0-9A-Za-z._-]+\.apps\.googleusercontent\.com$/, "must be a Google OAuth client id (…apps.googleusercontent.com)")
+      .optional(),
+  ),
+  JONATHON_GOOGLE_CLIENT_SECRET: emptyAsUnset.pipe(z.string().min(8).max(200).optional()),
+  /**
+   * Path of the redirect URI registered in Google Cloud Console, on the UI origin. "/oauth2callback" is proxied by the UI
+   * to the API's callback (apps/web/next.config.ts).
+   */
+  JONATHON_GOOGLE_REDIRECT_PATH: emptyAsUnset.pipe(z.enum(["/api/v1/auth/google/callback", "/oauth2callback"]).default("/api/v1/auth/google/callback")),
+  /** Optional: only these Google accounts (comma-separated emails) may sign in. Otherwise the first sign-in claims the install. */
+  JONATHON_GOOGLE_ALLOWED_EMAILS: z.string().default(""),
+  /** The browser-facing UI origin, used for the OAuth redirect URI. Default: the first JONATHON_WEB_ORIGINS entry. */
+  JONATHON_PUBLIC_URL: emptyAsUnset.pipe(
+    z
+      .string()
+      .regex(/^https?:\/\/[^\s/]+$/, "must be an origin such as http://localhost:3005")
+      .optional(),
+  ),
+  /** TESTING ONLY (needs JONATHON_ALLOW_TEST_HOOKS): Google endpoints for a simulated provider. */
+  JONATHON_GOOGLE_AUTH_URL: z.string().optional(),
+  JONATHON_GOOGLE_TOKEN_URL: z.string().optional(),
 
   AGY_PATH: z.string().default("agy"),
   AGY_MODEL: z
@@ -110,6 +149,11 @@ export type JonathonConfig = {
   mcpPublicUrl: string;
   importRoots: string[];
   requireExistingData: boolean;
+  runtimeInWorker: boolean;
+  /** Set only inside a container: the dedicated agy home whose sign-in Jonathon manages. */
+  agyHome: string | null;
+  /** Set when Sign in with Google is configured; then it is the only sign-in method. */
+  google: { clientId: string; clientSecret: string; allowedEmails: string[]; redirectUri: string; authUrl: string; tokenUrl: string } | null;
   runtime: {
     agyPath: string;
     /** Extra leading args; used by tests to run a fixture script through `node`. */
@@ -152,6 +196,36 @@ export function defaultDataDir(): string {
   }
   const xdg = process.env.XDG_DATA_HOME;
   return join(xdg && isAbsolute(xdg) ? xdg : join(homedir(), ".local", "share"), "jonathon");
+}
+
+function googleConfig(e: z.infer<typeof EnvSchema>, env: NodeJS.ProcessEnv): JonathonConfig["google"] {
+  if (!e.JONATHON_GOOGLE_CLIENT_ID) {
+    if (e.JONATHON_GOOGLE_CLIENT_SECRET) throw new Error("JONATHON_GOOGLE_CLIENT_SECRET is set but JONATHON_GOOGLE_CLIENT_ID is not");
+    return null;
+  }
+  if (!e.JONATHON_GOOGLE_CLIENT_SECRET) throw new Error("JONATHON_GOOGLE_CLIENT_ID is set but JONATHON_GOOGLE_CLIENT_SECRET is missing");
+  const origins = e.JONATHON_WEB_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean);
+  const publicUrl = e.JONATHON_PUBLIC_URL ?? origins.find((o) => o.includes("localhost")) ?? origins[0];
+  if (!publicUrl) throw new Error("set JONATHON_PUBLIC_URL for the Google redirect URI");
+  if (!origins.includes(publicUrl)) throw new Error(`JONATHON_PUBLIC_URL (${publicUrl}) must be one of JONATHON_WEB_ORIGINS`);
+  const testHooks = e.JONATHON_ALLOW_TEST_HOOKS;
+  if (!testHooks && (env.JONATHON_GOOGLE_AUTH_URL || env.JONATHON_GOOGLE_TOKEN_URL)) throw new Error("Google endpoint overrides are for tests only");
+  return {
+    clientId: e.JONATHON_GOOGLE_CLIENT_ID,
+    clientSecret: e.JONATHON_GOOGLE_CLIENT_SECRET,
+    allowedEmails: e.JONATHON_GOOGLE_ALLOWED_EMAILS.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+    redirectUri: `${publicUrl}${e.JONATHON_GOOGLE_REDIRECT_PATH}`,
+    authUrl: (testHooks && e.JONATHON_GOOGLE_AUTH_URL) || "https://accounts.google.com/o/oauth2/v2/auth",
+    tokenUrl: (testHooks && e.JONATHON_GOOGLE_TOKEN_URL) || "https://oauth2.googleapis.com/token",
+  };
+}
+
+function agyHome(raw: string | undefined, container: boolean): string | null {
+  const v = raw?.trim();
+  if (!v) return null;
+  if (!container) throw new Error("JONATHON_AGY_HOME is only valid inside a container (it lets Jonathon sign agy in and out).");
+  if (!isAbsolute(v) || resolve(v) === resolve("/")) throw new Error("JONATHON_AGY_HOME must be an absolute directory");
+  return resolve(v);
 }
 
 /** True inside a Docker or Podman container. */
@@ -225,6 +299,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, repoRoot = find
     mcpPublicUrl: e.JONATHON_MCP_PUBLIC_URL ?? `http://127.0.0.1:${e.JONATHON_PORT}/mcp`,
     importRoots: importRoots.map((r) => resolve(r)),
     requireExistingData: e.JONATHON_REQUIRE_EXISTING_DATA,
+    runtimeInWorker: e.JONATHON_RUNTIME_IN_WORKER,
+    agyHome: agyHome(e.JONATHON_AGY_HOME, container),
+    google: googleConfig(e, env),
     runtime: {
       agyPath: e.AGY_PATH,
       agyArgsPrefix: e.JONATHON_ALLOW_TEST_HOOKS && e.AGY_ARGS_PREFIX_JSON ? z.array(z.string()).parse(JSON.parse(e.AGY_ARGS_PREFIX_JSON)) : [],

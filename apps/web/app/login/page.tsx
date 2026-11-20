@@ -1,17 +1,30 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { AuthLayout } from "@/components/auth-layout";
-import { Button, ErrorBanner, Field, Input } from "@/components/ui";
-import { type ApiError, post, setCsrf } from "@/lib/api";
+import { GoogleSignInButton } from "@/components/google-button";
+import { Button, CardSkeleton, ErrorBanner, Field, Input, Notice } from "@/components/ui";
+import { type ApiError, get, post, setCsrf } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
+  const [mode, setMode] = useState<"google" | "password" | null>(null);
+  const [returned, setReturned] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    // An error from the Google callback arrives as ?error=… (text written by Jonathon's API, shown as plain text).
+    setReturned(new URLSearchParams(window.location.search).get("error"));
+    get<{ set_up: boolean; auth?: "google" | "password" }>("/setup/status")
+      .then((s) => {
+        if (!s.set_up) return router.replace("/setup");
+        setMode(s.auth ?? "password");
+      })
+      .catch(() => setMode("password"));
+  }, [router]);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -27,6 +40,23 @@ export default function LoginPage() {
       setBusy(false);
     }
   };
+  if (!mode) {
+    return (
+      <AuthLayout title="Sign in" subtitle="">
+        <CardSkeleton lines={2} label="sign-in" />
+      </AuthLayout>
+    );
+  }
+  if (mode === "google") {
+    return (
+      <AuthLayout title="Sign in" subtitle="Use the Google account that owns this Jonathon.">
+        <div className="space-y-5">
+          {returned && <Notice tone="warning">{returned}</Notice>}
+          <GoogleSignInButton />
+        </div>
+      </AuthLayout>
+    );
+  }
   return (
     <AuthLayout title="Sign in" subtitle="Enter the local account's username and password.">
       <form onSubmit={submit} className="space-y-5">

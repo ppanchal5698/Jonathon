@@ -19,7 +19,11 @@ const config: NextConfig = {
   // A second instance (scripts/qa.mjs) uses its own build folder so two dev servers never share .next.
   distDir: /^\.next[\w-]*$/.test(process.env.JONATHON_NEXT_DIST_DIR ?? "") ? process.env.JONATHON_NEXT_DIST_DIR : ".next",
   async rewrites() {
-    return [{ source: "/api/v1/:path*", destination: `${API}/api/v1/:path*` }];
+    return [
+      { source: "/api/v1/:path*", destination: `${API}/api/v1/:path*` },
+      // Google OAuth redirect URI registered as <UI origin>/oauth2callback (JONATHON_GOOGLE_REDIRECT_PATH): same handler.
+      { source: "/oauth2callback", destination: `${API}/api/v1/auth/google/callback` },
+    ];
   },
   async headers() {
     const csp = [

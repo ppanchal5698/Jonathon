@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "../logger";
 import { AppError } from "../util";
+import { clearAgySignIn, runAgySignIn, type SignInOutcome } from "./agy-auth";
 import { NdjsonParser } from "./ndjson";
 import { AGENTS, EXTRACTION_EFFORT_SCHEMAS, type PolicyPaths, prepareWorkspace, writePolicyFiles } from "./policy";
 import { killProcessTree, treeSpawnOptions } from "./process-tree";
@@ -30,6 +31,8 @@ export interface AntigravityOptions {
   maxConcurrent?: number;
   /** Extra env for tests only (e.g. fixture scenario). Never used for secrets. */
   extraEnv?: Record<string, string>;
+  /** Run the sign-in session in a pseudo-terminal (default: on Linux). Tests turn it off for the fixture CLI. */
+  signInPty?: boolean;
   log?: Logger;
 }
 
@@ -160,6 +163,33 @@ export class AntigravityCliRuntime implements ReasoningRuntime {
         resolve({ code, stdout, stderr });
       });
     });
+  }
+
+  /**
+   * One Google sign-in session for agy (Docker worker only; see runtime/agy-auth.ts). Runs in its own empty workspace
+   * with the tool-free agent and the session deny settings, like every other run.
+   */
+  signIn(opts: { onUrl: (url: string) => void; waitForCode: (signal: AbortSignal) => Promise<string>; signal?: AbortSignal; timeoutMs?: number }): Promise<SignInOutcome> {
+    this.policy = writePolicyFiles(this.o.dataDir);
+    const ws = prepareWorkspace(this.o.dataDir, "agy-signin");
+    return runAgySignIn({
+      executable: this.o.executable,
+      argsPrefix: this.o.argsPrefix,
+      cwd: ws.cwd,
+      settingsPath: this.policy.settingsPath,
+      agentName: AGENTS.answer.name,
+      env: runtimeEnv(this.o.extraEnv),
+      usePty: this.o.signInPty ?? process.platform === "linux",
+      timeoutMs: opts.timeoutMs ?? 90_000,
+      signal: opts.signal,
+      onUrl: opts.onUrl,
+      waitForCode: opts.waitForCode,
+    });
+  }
+
+  /** Remove agy's stored sign-in from Jonathon's dedicated agy home. Callers verify with checkAuthentication(). */
+  clearSignIn(home: string, thorough: boolean): string[] {
+    return clearAgySignIn(home, thorough);
   }
 
   async inspectInstallation(): Promise<InstallationInfo> {

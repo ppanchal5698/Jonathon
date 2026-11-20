@@ -70,7 +70,17 @@ services:
     <<: *hardening
     depends_on:
       init: { condition: service_completed_successfully }
-    environment: *app-env
+    environment:
+      <<: *app-env
+      # The API image has no agy: runtime status, authentication checks and Google sign-in run in the worker.
+      JONATHON_RUNTIME_IN_WORKER: "true"
+      # Sign in with Google for Jonathon itself. When the client id is set, it is the ONLY way to sign in.
+      # Redirect URI to register in Google Cloud Console: http://localhost:<UI port>/api/v1/auth/google/callback
+      JONATHON_GOOGLE_CLIENT_ID: ${JONATHON_GOOGLE_CLIENT_ID:-}
+      JONATHON_GOOGLE_CLIENT_SECRET: ${JONATHON_GOOGLE_CLIENT_SECRET:-}
+      JONATHON_GOOGLE_ALLOWED_EMAILS: ${JONATHON_GOOGLE_ALLOWED_EMAILS:-}
+      JONATHON_PUBLIC_URL: http://localhost:${JONATHON_DOCKER_UI_PORT:-3005}
+      JONATHON_GOOGLE_REDIRECT_PATH: ${JONATHON_GOOGLE_REDIRECT_PATH:-}
     volumes:
       - *data-volume
       - type: bind
@@ -92,7 +102,8 @@ services:
     stop_grace_period: 20s
 
   worker:
-    image: jonathon-server:local
+    build: { context: ., target: worker }
+    image: jonathon-worker:local
     <<: *hardening
     depends_on:
       init: { condition: service_completed_successfully }
@@ -100,8 +111,14 @@ services:
     environment:
       <<: *app-env
       JONATHON_HEALTH_FILE: /tmp/worker-health
+      AGY_PATH: /usr/local/bin/agy
     volumes:
       - *data-volume
+      # agy's home: its Google sign-in (token files) lives here, never in the image or the client-data volume.
+      # "Sign out" on the Setup page removes it; `docker volume rm jonathon-agy-home` does too.
+      - type: volume
+        source: agy-home
+        target: /home/agy
       - type: bind
         source: ${JONATHON_HOST_IMPORT_DIR:-./docker/empty-imports}
         target: /imports
@@ -174,3 +191,5 @@ services:
 volumes:
   jonathon-data:
     name: ${JONATHON_DOCKER_VOLUME:-jonathon-data}
+  agy-home:
+    name: ${JONATHON_DOCKER_AGY_VOLUME:-jonathon-agy-home}

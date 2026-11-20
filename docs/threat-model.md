@@ -54,6 +54,22 @@ Trust boundaries:
 * Containers run as uid 1000 with a read-only root filesystem, no capabilities, `no-new-privileges`, and no Docker socket.
 * Images contain no secrets or client data (`.dockerignore` excludes `.env*`, databases, keys and tests). No telemetry
   (`NEXT_TELEMETRY_DISABLED=1`).
-* Gap: live AI is not containerized. A containerized `agy` inside the worker would share the worker's read-write view of all
-  client files; the proposed isolated runner (no data mounts) is not built yet.
+* Live AI runs `agy` inside the worker container, which has `/data` read-write. Containment of the model relies on the
+  tool-free agent, the session deny settings and the stream guard, as on the host, not on the container boundary. An
+  isolated runner with no data mounts is not built.
+* `agy`'s Google sign-in lives in the `jonathon-agy-home` volume (worker only). Anyone who can read that Docker volume
+  can use the account's Antigravity access. Sign-in and sign-out are human-only, CSRF-protected and audited. The link
+  shown is restricted to Google's OAuth endpoint. The pasted one-time code is kept only until the worker reads it.
 * Gap: the MCP port also serves `/api/v1` on loopback (still guarded by session cookie, CSRF and Origin checks).
+
+## Sign in with Google (Jonathon account)
+
+* OIDC authorization code + PKCE; state/nonce/verifier server-side and single-use; a browser-binding cookie defeats
+  login CSRF. The ID token arrives over TLS from Google's token endpoint and is checked for iss, aud/azp, exp, nonce and
+  email_verified.
+* One owner: the Google `sub` bound to the single account. Other Google accounts are refused. The allowlist
+  (`JONATHON_GOOGLE_ALLOWED_EMAILS`) is recommended so even the first sign-in is restricted.
+* The client secret is configuration (git-ignored `docker/compose.env`, visible to anyone who can run `docker inspect`
+  on this machine). It never reaches the browser or logs.
+* Only the callback route is exempt from the cross-site request check, GET only.
+

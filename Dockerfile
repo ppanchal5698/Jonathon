@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 #
 # Jonathon images: one Dockerfile, two runtime targets.
-#   target "server" → API + MCP (apps/server/src/main.ts), the worker (src/worker.ts) and the ops CLIs (src/cli/*).
+#   target "server" → API + MCP (apps/server/src/main.ts) and the ops CLIs (src/cli/*). No AI runtime.
+#   target "worker" → server + the Antigravity CLI for the background worker (src/worker.ts).
 #   target "web"    → Next.js standalone server for the UI (port 3005), proxying /api/v1 to the API.
 #
 # Base image: Docker Official Image node, Debian 13 (trixie) slim, pinned by tag AND multi-arch index digest.
@@ -73,6 +74,46 @@ WORKDIR /app/apps/server
 EXPOSE 4100
 # `node --import tsx` runs TypeScript in-process: node is the signal-receiving process (tini from `init: true` is PID 1).
 CMD ["node", "--import", "tsx", "src/main.ts"]
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Worker = server image + the Antigravity CLI (agy). The API image stays without agy.
+# agy release pinned by URL and SHA-512 from the vendor's release manifest (what the official install.sh verifies), read
+# 2026-11-20 from https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_{amd64,arm64}.json
+# No install script is run. ca-certificates: agy is a Go binary and needs the system CA bundle (Node ships its own).
+# util-linux `script` (already in the base image) gives the sign-in run a terminal (see core/src/runtime/agy-auth.ts).
+FROM server AS worker
+ARG TARGETARCH
+ARG AGY_VERSION=1.5.13
+ARG AGY_URL_AMD64=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.13-5999302598852608/linux-x64/cli_linux_x64.tar.gz
+ARG AGY_SHA512_AMD64=014b37387703acab1f47cd532c8bb60167a6a3537b0f9891de03f1b1ffa9614307bc83c4b2f7551273b0877d722716b0cd9e26782f6b2a50705db4f05e18c68f
+ARG AGY_URL_ARM64=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.13-5999302598852608/linux-arm/cli_linux_arm64.tar.gz
+ARG AGY_SHA512_ARM64=dccea2eb455099f5175f0c87cc47b38fcefe4cb0cb44dea3927469bb4bbf68ac3c0b30fc04affb24c17e90959386a93c3785e8e4b8b1a3338ca4e4d57b80057b
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && command -v script >/dev/null
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) url="$AGY_URL_AMD64"; sum="$AGY_SHA512_AMD64" ;; \
+      arm64) url="$AGY_URL_ARM64"; sum="$AGY_SHA512_ARM64" ;; \
+      *) echo "unsupported architecture ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    AGY_DL="$url" node -e "fetch(process.env.AGY_DL).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.arrayBuffer()}).then(b=>require('fs').writeFileSync('/tmp/agy.tar.gz',Buffer.from(b)))"; \
+    echo "$sum  /tmp/agy.tar.gz" | sha512sum -c -; \
+    mkdir -p /tmp/agy && tar -xzf /tmp/agy.tar.gz -C /tmp/agy antigravity; \
+    install -m 0755 -o root -g root /tmp/agy/antigravity /usr/local/bin/agy; \
+    rm -rf /tmp/agy /tmp/agy.tar.gz; \
+    test "$(/usr/local/bin/agy --version)" = "$AGY_VERSION"; \
+    mkdir -p /home/agy && chown node:node /home/agy
+# agy keeps its sign-in in files under $HOME (no D-Bus keyring in a container). /home/agy is the jonathon-agy-home
+# volume, mounted only into the worker. The binary is root-owned in a read-only filesystem: it cannot self-update.
+ENV HOME=/home/agy \
+    AGY_PATH=/usr/local/bin/agy \
+    JONATHON_AGY_HOME=/home/agy
+USER node
+WORKDIR /app/apps/server
+CMD ["node", "--import", "tsx", "src/worker.ts"]
 
 # ---------------------------------------------------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS web

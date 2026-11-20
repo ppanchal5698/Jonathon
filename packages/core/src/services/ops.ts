@@ -209,7 +209,10 @@ export class OpsService {
   async runtimeDiagnostics(includeAuth: boolean): Promise<Record<string, unknown>> {
     const installation = await this.ctx.runtime.inspectInstallation();
     const capabilities = installation.installed ? await this.ctx.runtime.inspectCapabilities() : null;
-    const auth = includeAuth && installation.installed ? await this.ctx.runtime.checkAuthentication() : null;
+    let auth = includeAuth && installation.installed ? await this.ctx.runtime.checkAuthentication() : null;
+    if (auth?.status === "auth_required" && this.ctx.config.agyHome) {
+      auth = { ...auth, detail: "Not signed in. Use “Sign in with Google” on the Setup page." };
+    }
     const status = !installation.installed
       ? this.ctx.runtime.provider === "demo-extractive"
         ? "demo"

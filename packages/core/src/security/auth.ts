@@ -110,6 +110,28 @@ export class AuthService {
     return { sessionId: row.id, userId: row.user_id, username: row.username, csrfToken: row.csrf_token, expiresAt: row.expires_at };
   }
 
+  /** Create a browser session for an already-verified user (Sign in with Google). Same token/CSRF scheme as login(). */
+  startSession(user: { id: string; username: string }, how: string): { token: string; session: SessionInfo } {
+    const token = randomToken(32);
+    const csrf = randomToken(24);
+    const now = nowIso();
+    const expiresAt = new Date(Date.now() + this.sessionTtlHours * 3_600_000).toISOString();
+    const sessionId = newId("ses");
+    run(
+      this.db,
+      "INSERT INTO sessions (id, user_id, token_hash, csrf_token, created_at, expires_at, last_seen_at) VALUES (?,?,?,?,?,?,?)",
+      sessionId,
+      user.id,
+      sha256(token),
+      csrf,
+      now,
+      expiresAt,
+      now,
+    );
+    audit(this.db, { principal: { kind: "user", userId: user.id, username: user.username }, action: "session.login", details: { via: how } });
+    return { token, session: { sessionId, userId: user.id, username: user.username, csrfToken: csrf, expiresAt } };
+  }
+
   logout(sessionId: string): void {
     run(this.db, "DELETE FROM sessions WHERE id = ?", sessionId);
   }

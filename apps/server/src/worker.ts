@@ -18,6 +18,9 @@ async function main() {
   log.info({ runtime: diag.status, provider: diag.provider }, "runtime inspected");
   const worker = app.startWorker();
   log.info({ worker_id: worker.workerId, concurrency: config.workerConcurrency }, "worker started");
+  // Docker worker with its own agy home: handle "Sign in with Google" / "Sign out" requests from the UI.
+  const authAgent = config.agyHome && config.mode === "live" ? app.startRuntimeAuthAgent() : null;
+  if (authAgent) log.info("agy sign-in requests are handled by this worker");
 
   // Container health check: a file whose mtime advances only while this worker's own heartbeat row (written by the
   // job loop) is fresh. A hung loop therefore turns the container unhealthy. Path from JONATHON_HEALTH_FILE.
@@ -41,6 +44,7 @@ async function main() {
     stopping = true;
     if (health) clearInterval(health);
     log.info({ signal, active: worker.activeJobs }, "stopping worker; releasing running jobs");
+    await authAgent?.stop();
     await app.ctx.runtime.cancel();
     await worker.stop();
     app.close();
