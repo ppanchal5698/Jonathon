@@ -21,14 +21,18 @@ export function openDatabase(path: string): Db {
 
 export function migrate(db: Db): string[] {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL) STRICT;`);
-  const done = new Set(
-    (db.prepare("SELECT id FROM schema_migrations").all() as { id: string }[]).map((r) => r.id),
-  );
+  const done = new Set((db.prepare("SELECT id FROM schema_migrations").all() as { id: string }[]).map((r) => r.id));
   const applied: string[] = [];
   for (const m of MIGRATIONS) {
     if (done.has(m.id)) continue;
     db.exec("BEGIN IMMEDIATE");
     try {
+      // The API and the worker start together and both migrate: re-check under the write lock, because the other
+      // process may have applied this migration since the list above was read.
+      if (db.prepare("SELECT 1 FROM schema_migrations WHERE id = ?").get(m.id)) {
+        db.exec("COMMIT");
+        continue;
+      }
       db.exec(m.sql);
       db.prepare("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(m.id, new Date().toISOString());
       db.exec("COMMIT");

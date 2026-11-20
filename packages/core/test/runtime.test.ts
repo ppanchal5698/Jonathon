@@ -10,7 +10,10 @@ describe("NDJSON parsing", () => {
   it("handles records split across chunks, split UTF-8 characters, CRLF and invalid lines", () => {
     const recs: unknown[] = [];
     const bad: string[] = [];
-    const p = new NdjsonParser((r) => recs.push(r), (l) => bad.push(l));
+    const p = new NdjsonParser(
+      (r) => recs.push(r),
+      (l) => bad.push(l),
+    );
     const text = '{"a":"héllo ✓"}\r\n{"b":2}\nnot json\n{"c":';
     const bytes = new TextEncoder().encode(text);
     for (let i = 0; i < bytes.length; i += 3) p.push(bytes.subarray(i, i + 3));
@@ -31,15 +34,21 @@ describe("Antigravity runtime adapter (fixture playback, not live)", () => {
     delete process.env.JONATHON_SECRET_PROBE;
     expect(r.completion).toBe("success");
     const seen = JSON.parse(readFileSync(rec, "utf8")) as { args: string[]; workspace: string[]; env: string[] };
-    expect(seen.args).toEqual(expect.arrayContaining(["--agent", AGENT_NAME, "--sandbox", "--disable-slash-commands", "--settings", "--json-schema", "--input-format", "stream-json"]));
+    expect(seen.args).toEqual(
+      expect.arrayContaining(["--agent", AGENT_NAME, "--sandbox", "--disable-slash-commands", "--settings", "--json-schema", "--input-format", "stream-json"]),
+    );
     for (const forbidden of ["--dangerously-skip-permissions", "--continue", "-c", "-p", "--print", "--prompt"]) expect(seen.args).not.toContain(forbidden);
     expect(seen.args.join(" ")).not.toContain("Customers must verify"); // prompt never on the command line
     // Only Jonathon's own tool-free agent definitions (one per team role); nothing else.
-    expect(seen.workspace.map((w) => w.replace(/\\/g, "/")).sort()).toEqual([".agents", ".agents/agents", ...Object.values(AGENTS).map((a) => `.agents/agents/${a.name}.md`)].sort());
+    expect(seen.workspace.map((w) => w.replace(/\\/g, "/")).sort()).toEqual(
+      [".agents", ".agents/agents", ...Object.values(AGENTS).map((a) => `.agents/agents/${a.name}.md`)].sort(),
+    );
     expect(seen.env).not.toContain("JONATHON_SECRET_PROBE");
     const settingsPath = seen.args[seen.args.indexOf("--settings") + 1]!;
     const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-    expect(settings.permissions.deny).toEqual(expect.arrayContaining(["command(*)", "read_file(*)", "write_file(*)", "read_url(*)", "execute_url(*)", "mcp(*)"]));
+    expect(settings.permissions.deny).toEqual(
+      expect.arrayContaining(["command(*)", "read_file(*)", "write_file(*)", "read_url(*)", "execute_url(*)", "mcp(*)"]),
+    );
     expect(settings.toolPermission).toBe("strict");
   });
 
@@ -57,9 +66,11 @@ describe("Antigravity runtime adapter (fixture playback, not live)", () => {
   });
 
   it("exit 0 with a deny-rule tool error is a policy violation, not success", async () => {
-    await expect(fakeRuntime(tempDir(), "denied").run({ projectId: "prj_0000000000000000000000000a", prompt: PROMPT, schema: "answer" })).rejects.toMatchObject({
-      code: "ANTIGRAVITY_POLICY_VIOLATION",
-    });
+    await expect(fakeRuntime(tempDir(), "denied").run({ projectId: "prj_0000000000000000000000000a", prompt: PROMPT, schema: "answer" })).rejects.toMatchObject(
+      {
+        code: "ANTIGRAVITY_POLICY_VIOLATION",
+      },
+    );
   });
 
   it("exit 0 with soft-denied actions is reported as permission_denied", async () => {
@@ -82,14 +93,20 @@ describe("Antigravity runtime adapter (fixture playback, not live)", () => {
   it("reports missing structured output and invalid stdout", async () => {
     const r = await fakeRuntime(tempDir(), "no-structured").run({ projectId: "prj_0000000000000000000000000a", prompt: PROMPT, schema: "answer" });
     expect(r.structured).toBeNull();
-    await expect(fakeRuntime(tempDir(), "invalid-json-line").run({ projectId: "prj_0000000000000000000000000a", prompt: PROMPT, schema: "answer" })).rejects.toMatchObject({
+    await expect(
+      fakeRuntime(tempDir(), "invalid-json-line").run({ projectId: "prj_0000000000000000000000000a", prompt: PROMPT, schema: "answer" }),
+    ).rejects.toMatchObject({
       code: "INVALID_RUNTIME_OUTPUT",
     });
   });
 
   it("detects when a resumed conversation was silently replaced", async () => {
     const requested = "11111111-2222-4333-8444-555555555555";
-    const r = await fakeRuntime(tempDir(), "resume-mismatch").resume(requested, { projectId: "prj_0000000000000000000000000a", prompt: PROMPT, schema: "answer" });
+    const r = await fakeRuntime(tempDir(), "resume-mismatch").resume(requested, {
+      projectId: "prj_0000000000000000000000000a",
+      prompt: PROMPT,
+      schema: "answer",
+    });
     expect(r.contextRebuilt).toBe(true);
     expect(r.conversationId).not.toBe(requested);
     expect(r.warnings.join(" ")).toMatch(/runtime_context_rebuilt/);
@@ -121,14 +138,24 @@ describe("Antigravity runtime adapter (fixture playback, not live)", () => {
   it("enforces a wall-clock timeout", async () => {
     const dir = tempDir();
     const rt = fakeRuntime(dir, "hang-with-child", ["--pidfile", join(dir, "p")], 5_000);
-    await expect(rt.run({ projectId: "prj_0000000000000000000000000a", prompt: PROMPT, schema: "answer", timeoutMs: 1_500 })).rejects.toMatchObject({ code: "ANTIGRAVITY_TIMEOUT" });
+    await expect(rt.run({ projectId: "prj_0000000000000000000000000a", prompt: PROMPT, schema: "answer", timeoutMs: 1_500 })).rejects.toMatchObject({
+      code: "ANTIGRAVITY_TIMEOUT",
+    });
   });
 
   it("refuses prompts over the configured size and missing executables", async () => {
     const rt = fakeRuntime(tempDir(), "answer-cite");
-    await expect(rt.run({ projectId: "prj_0000000000000000000000000a", prompt: "x".repeat(300_000), schema: "answer" })).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    await expect(rt.run({ projectId: "prj_0000000000000000000000000a", prompt: "x".repeat(300_000), schema: "answer" })).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+    });
     const { AntigravityCliRuntime } = await import("@jonathon/core");
-    const missing = new AntigravityCliRuntime({ dataDir: tempDir(), executable: "agy-does-not-exist-xyz", timeoutMs: 5_000, maxOutputBytes: 1e6, maxPromptChars: 1e6 });
+    const missing = new AntigravityCliRuntime({
+      dataDir: tempDir(),
+      executable: "agy-does-not-exist-xyz",
+      timeoutMs: 5_000,
+      maxOutputBytes: 1e6,
+      maxPromptChars: 1e6,
+    });
     expect((await missing.inspectInstallation()).installed).toBe(false);
   });
 

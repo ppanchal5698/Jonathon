@@ -16,6 +16,7 @@ import {
   type EntityType,
   EntityTypeSchema,
   ERROR_HTTP_STATUS,
+  JobStatusSchema,
   GenerateDocumentsBodySchema,
   LoginBodySchema,
   PasteTextBodySchema,
@@ -48,9 +49,17 @@ function parse<T extends z.ZodType>(schema: T, value: unknown): z.infer<T> {
 
 type P = { pid: string };
 
-export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
+/**
+ * "all": REST + MCP on one listener (native default). "api": REST only. "mcp": MCP plus health/readiness only; this is
+ * the listener Docker publishes for Claude Code, so /api/v1 is not reachable from the host at all.
+ */
+export type Surface = "all" | "api" | "mcp";
+const MCP_SURFACE_PATHS = new Set(["/mcp", "/api/v1/health", "/api/v1/ready"]);
+
+export async function buildServer(app: JonathonApp, opts: { surface?: Surface; port?: number } = {}): Promise<FastifyInstance> {
+  const surface = opts.surface ?? "all";
   const { config, log } = app.ctx;
-  const hosts = allowedHosts(config.port, config.webOrigins);
+  const hosts = allowedHosts(opts.port ?? config.port, config.webOrigins);
   // Container deployments: the web container's proxy reaches the API by service name (e.g. server:4100).
   for (const h of config.allowedHosts) hosts.add(h);
   const origins = new Set(config.webOrigins);
@@ -66,6 +75,12 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   await f.register(multipart, { limits: { fileSize: config.maxUploadBytes, files: 20, fields: 10, parts: 30 } });
 
   f.addHook("onRequest", async (req, reply) => {
+    const path = req.url.split("?")[0]!;
+    const wrongSurface = (surface === "mcp" && !MCP_SURFACE_PATHS.has(path)) || (surface === "api" && path === "/mcp");
+    if (wrongSurface) {
+      securityHeaders(reply);
+      return reply.status(404).send({ error: { code: "NOT_FOUND", message: "not found on this listener", correlation_id: req.id } });
+    }
     reply.header("X-Correlation-Id", req.id);
     securityHeaders(reply);
     checkHostAndOrigin(req, hosts, origins);
@@ -245,10 +260,10 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   });
   // Folder import: scan shows what would be imported; import queues a background job. Human session only.
   f.post<{ Params: P }>("/api/v1/projects/:pid/sources/folder/scan", { preHandler: authed }, async (req) =>
-    ok(app.folders.scan(req.principal!, req.params.pid, parse(FolderScanBodySchema, req.body))),
+    ok(await app.folders.scan(req.principal!, req.params.pid, parse(FolderScanBodySchema, req.body))),
   );
   f.post<{ Params: P }>("/api/v1/projects/:pid/sources/folder/import", { preHandler: authed }, async (req) =>
-    ok(app.folders.queueImport(req.principal!, req.params.pid, parse(FolderImportBodySchema, req.body))),
+    ok(await app.folders.queueImport(req.principal!, req.params.pid, parse(FolderImportBodySchema, req.body))),
   );
   f.post<{ Params: P }>("/api/v1/projects/:pid/sources/paste", { preHandler: authed }, async (req) => {
     const b = parse(PasteTextBodySchema, req.body);
@@ -443,7 +458,7 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     return ok(app.ctx.queue.list({ projectId: req.params.pid, limit: 100 }));
   });
   f.get<{ Querystring: { status?: string } }>("/api/v1/jobs", { preHandler: authed }, async (req) =>
-    ok(app.ctx.queue.list({ statuses: req.query.status ? (req.query.status.split(",") as never) : undefined, limit: 200 })),
+    ok(app.ctx.queue.list({ statuses: req.query.status ? parse(z.array(JobStatusSchema).max(10), req.query.status.split(",")) : undefined, limit: 200 })),
   );
   f.get<{ Params: P & { jid: string } }>("/api/v1/projects/:pid/jobs/:jid", { preHandler: authed }, async (req) => {
     try {
@@ -505,7 +520,11 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   f.get("/api/v1/ops/health", { preHandler: authed }, async () => ok(app.ops.health()));
   f.get<{ Querystring: { auth?: string } }>("/api/v1/ops/runtime", { preHandler: authed }, async (req) =>
     // Docker: the API container has no agy; the worker answers (and runs the authentication check when asked).
-    ok(config.runtimeInWorker ? await app.runtimeAuth.diagnostics(req.principal!, req.query.auth === "1") : await app.ops.runtimeDiagnostics(req.query.auth === "1")),
+    ok(
+      config.runtimeInWorker
+        ? await app.runtimeAuth.diagnostics(req.principal!, req.query.auth === "1")
+        : await app.ops.runtimeDiagnostics(req.query.auth === "1"),
+    ),
   );
 
   // ----- Antigravity sign-in (Docker worker). Human session + CSRF only; MCP tokens never reach these routes. -----

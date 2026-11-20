@@ -110,29 +110,29 @@ write lock, so a worker that lost the lease commits nothing.
    wall-clock timeout and a heap limit. It writes `extracted/<src>/<rev>.md` and `.locators.json`, then indexes
    the chunks (FTS5) with locators: page, sheet and range, heading path, line, slide, JSON pointer.
 5. If AI processing is enabled for the project, an `extract_knowledge` job is queued automatically and proposes, for review:
-   * **requirements** (draft, with a description and `proposed` statements whose basis is decided by the server through a
+   - **requirements** (draft, with a description and `proposed` statements whose basis is decided by the server through a
      verbatim match against the cited evidence);
-   * **open questions**, including the ones raised while drafting a requirement (linked to it, listed in its
+   - **open questions**, including the ones raised while drafting a requirement (linked to it, listed in its
      `open_questions` section by ID);
-   * **conflicts** between evidence blocks, or between the new document and an existing requirement (that requirement's
+   - **conflicts** between evidence blocks, or between the new document and an existing requirement (that requirement's
      evidence becomes side 2 and it is listed in `related_requirements`);
-   * **change proposals** (`CHANGE-n`) when the document adds to or changes an existing requirement. The prompt lists
+   - **change proposals** (`CHANGE-n`) when the document adds to or changes an existing requirement. The prompt lists
      existing requirements by ID; a proposal stores a replacement description and/or additions as
      `[<section> · client-stated|AI-inferred] text`, plus the base revision and evidence.
-   To catch disagreements between documents whatever order they arrive in, each batch also carries up to 8 short
-   passages from the project's **other** documents (project-scoped full-text search on the batch's distinctive terms,
-   plus one search per technology or timeline topic it mentions, e.g. a database name → "database"). The model may use
-   these `O` passages only for conflicts; the drafted document is always side 1, and requirements, updates and questions
-   can cite only the drafted document. Drafting runs one document at a time per project.
-   Near-duplicates of existing items are skipped (normalized text, token overlap with plural folding). Nothing produced
-   here is approved or applied.
+     To catch disagreements between documents whatever order they arrive in, each batch also carries up to 8 short
+     passages from the project's **other** documents (project-scoped full-text search on the batch's distinctive terms,
+     plus one search per technology or timeline topic it mentions, e.g. a database name → "database"). The model may use
+     these `O` passages only for conflicts; the drafted document is always side 1, and requirements, updates and questions
+     can cite only the drafted document. Drafting runs one document at a time per project.
+     Near-duplicates of existing items are skipped (normalized text, token overlap with plural folding). Nothing produced
+     here is approved or applied.
 
 ### Folder import (`services/folder-import.ts`)
 
 Instead of uploading files one by one, the signed-in person can give the absolute path of a folder on this computer.
-`POST /sources/folder/scan` lists every file (sub-folders optional) as *new*, *changed* (same relative path, different
-content: imported as a new revision of that source), *unchanged*, *duplicate* (same content under another name) or
-*skipped* with a reason (unsupported type, empty, too large, temporary Office file, link or junction, tooling folders
+`POST /sources/folder/scan` lists every file (sub-folders optional) as _new_, _changed_ (same relative path, different
+content: imported as a new revision of that source), _unchanged_, _duplicate_ (same content under another name) or
+_skipped_ with a reason (unsupported type, empty, too large, temporary Office file, link or junction, tooling folders
 such as `.git` and `node_modules`). Nothing is read into Jonathon by a scan. `POST /sources/folder/import` takes the
 chosen relative paths and queues an `import_folder` job, which re-scans, accepts only paths the scan offers, and
 ingests each file through the normal upload path (so drafting, mapping and document refresh follow as usual). The
@@ -144,13 +144,13 @@ levels, 20,000 directory entries per scan.
 Drafting and answering are done by a team of tool-free `agy` agents, each defined in the runtime workspace with its own
 system prompt, its own JSON schema and exactly one job. Code orchestrates them and has the last word.
 
-| Step | Agent / check | Job |
-|---|---|---|
-| 1 | `jonathon-classifier` (once per document) | Document kind (requirements spec, brief, setup guide, plan/estimate, notes, other), subject system, numbering prefixes. Routes the specialists: plans and estimates never get the requirements or change specialists. |
-| 2 | `jonathon-requirements`, `jonathon-questions`, `jonathon-conflicts`, `jonathon-changes` (in parallel per batch) | Each drafts only its own kind of item from the batch. Only the conflicts specialist sees other-document `O` passages. |
-| 3 | Code gate | Drops any statement, question, conflict side or requirement title whose numbers or client IDs are not in the evidence it cites (evidence IDs such as `E3` and Jonathon IDs are ignored). |
-| 4 | `jonathon-draft-verifier` | Gets every remaining candidate (`R1`, `R1-2`, `Q1`, `C1`, `U1` ...) and only the evidence those candidates cite. Returns supported / partly supported (with the unsupported statement IDs) / unsupported. Fail-closed: a candidate without a verdict is not kept. |
-| 5 | Code | Statement basis (client-stated vs AI-inferred) by wording match, de-duplication, persistence as drafts. |
+| Step | Agent / check                                                                                                   | Job                                                                                                                                                                                                                                                               |
+| ---- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `jonathon-classifier` (once per document)                                                                       | Document kind (requirements spec, brief, setup guide, plan/estimate, notes, other), subject system, numbering prefixes. Routes the specialists: plans and estimates never get the requirements or change specialists.                                             |
+| 2    | `jonathon-requirements`, `jonathon-questions`, `jonathon-conflicts`, `jonathon-changes` (in parallel per batch) | Each drafts only its own kind of item from the batch. Only the conflicts specialist sees other-document `O` passages.                                                                                                                                             |
+| 3    | Code gate                                                                                                       | Drops any statement, question, conflict side or requirement title whose numbers or client IDs are not in the evidence it cites (evidence IDs such as `E3` and Jonathon IDs are ignored).                                                                          |
+| 4    | `jonathon-draft-verifier`                                                                                       | Gets every remaining candidate (`R1`, `R1-2`, `Q1`, `C1`, `U1` ...) and only the evidence those candidates cite. Returns supported / partly supported (with the unsupported statement IDs) / unsupported. Fail-closed: a candidate without a verdict is not kept. |
+| 5    | Code                                                                                                            | Statement basis (client-stated vs AI-inferred) by wording match, de-duplication, persistence as drafts.                                                                                                                                                           |
 
 Every removal (by the code gate or the verifier) is recorded with its reason in the job result and shown under the
 document on the Documents page. If any agent fails or returns output that does not match its schema, the job fails
@@ -170,19 +170,19 @@ slot. All team roles use the extraction effort (`AGY_EXTRACTION_EFFORT`, default
 
 Every project has a graph that connects everything Jonathon holds about it:
 
-| Node | From |
-|---|---|
-| client document, passage | sources and their extracted chunks (current revisions only) |
-| requirement, decision, open question, conflict, change proposal | knowledge entities |
+| Node                                                                                                                                               | From                                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| client document, passage                                                                                                                           | sources and their extracted chunks (current revisions only)               |
+| requirement, decision, open question, conflict, change proposal                                                                                    | knowledge entities                                                        |
 | concept (actor, feature, system, external system, data entity, technology, business term, environment, metric, organization, workflow, regulation) | the `jonathon-graph` agent, one `graph_extract` job per uploaded revision |
-| generated document | `documents/<doc_type>.json` |
+| generated document                                                                                                                                 | `documents/<doc_type>.json`                                               |
 
-| Link | Confidence | How it is found |
-|---|---|---|
-| document contains passage; knowledge cites passage; knowledge → knowledge (depends on, about, resolves, changes, references) | EXTRACTED | recorded structure |
-| passage / knowledge **mentions** concept | EXTRACTED | code: the concept's name or an alias appears in the text (word-bounded, case and punctuation ignored) |
-| concept → concept (uses, integrates with, stores, hosted on, authenticates with ...) | INFERRED | the agent labels it; kept only when its quote is found word for word in a passage it cites and both ends are known concepts |
-| generated document built from passage / knowledge / concept | EXTRACTED | the document's citations |
+| Link                                                                                                                         | Confidence | How it is found                                                                                                             |
+| ---------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| document contains passage; knowledge cites passage; knowledge → knowledge (depends on, about, resolves, changes, references) | EXTRACTED  | recorded structure                                                                                                          |
+| passage / knowledge **mentions** concept                                                                                     | EXTRACTED  | code: the concept's name or an alias appears in the text (word-bounded, case and punctuation ignored)                       |
+| concept → concept (uses, integrates with, stores, hosted on, authenticates with ...)                                         | INFERRED   | the agent labels it; kept only when its quote is found word for word in a passage it cites and both ends are known concepts |
+| generated document built from passage / knowledge / concept                                                                  | EXTRACTED  | the document's citations                                                                                                    |
 
 The agent's concepts are kept only when their name (or an alias) is in a passage they cite; everything else is listed
 with its reason in the job result. Concepts are merged across documents by normalized name and alias. Extractions are
@@ -203,12 +203,12 @@ The catalogue has 66 document types in 10 categories (requirements, architecture
 integrations, security, DevOps, engineering standards, testing); 25 are marked must-have. Each type lists its
 sections, the search topics that find its client passages and the concept kinds it needs. A section is either:
 
-* **compiled** by code from knowledge and the graph (requirement lists by type, acceptance criteria, stated NFR numbers,
+- **compiled** by code from knowledge and the graph (requirement lists by type, acceptance criteria, stated NFR numbers,
   decisions, open questions and conflicts relevant to the document, concept tables with a verbatim sentence from the
   client material, document inventory, traceability matrix). No model; always in sync.
-* **written** by `jonathon-doc-writer`, which returns typed blocks: *fact* (must cite E evidence or knowledge IDs),
-  *proposal* (engineering recommendation, never presented as a client requirement), *gap* (a question the material
-  does not answer) and *diagram* (Mermaid). Then:
+- **written** by `jonathon-doc-writer`, which returns typed blocks: _fact_ (must cite E evidence or knowledge IDs),
+  _proposal_ (engineering recommendation, never presented as a client requirement), _gap_ (a question the material
+  does not answer) and _diagram_ (Mermaid). Then:
   1. Code gate: unknown citations are dropped; a fact without a valid citation, or with numbers not in what it cites,
      is removed; diagrams must be Mermaid. Facts whose wording is in the cited evidence are `client_stated`.
   2. `jonathon-doc-verifier` checks restated facts (F) and proposals (P). Unsupported items are removed with the
@@ -238,12 +238,12 @@ The project's **Review** tab lists every item still waiting for a human: draft o
 open questions and conflicts not yet reviewed, and open change proposals. Each action opens a confirmation dialog; the
 server still requires the human session and the exact `<verb> <ID>` phrase, which the dialog sends after the click.
 
-| Action | Requirement / decision | Open question / conflict | Change proposal |
-|---|---|---|---|
-| Accept | `approve`: marks every proposed statement reviewed and approves, in **one** revision, with an approval event | `accept`: sets `reviewed: true`; stays open until answered / resolved | `accept`: applies the description/additions to the requirement (new revision; an approved requirement returns to `in_review` and dependants go stale) and marks the proposal `accepted`. Refused if the requirement's content changed since the proposal's base revision. Free-text proposals are only marked accepted. |
-| Edit | structured editor; edited statements become `human_authored`; editing approved content returns it to review | structured editor; counts as reviewed | not editable |
-| Reject | `rejected` | `withdrawn` / `dismissed` | `rejected` |
-| Delete | `delete <ID>`: removes the live file, projection row and search chunk. `history/<ID>/` keeps every revision plus a `deleted-r<n>.json` tombstone; the ID is never reused and reconciliation never re-imports it. Open proposals for a deleted requirement become `stale`. |||
+| Action | Requirement / decision                                                                                                                                                                                                                                                    | Open question / conflict                                              | Change proposal                                                                                                                                                                                                                                                                                                         |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accept | `approve`: marks every proposed statement reviewed and approves, in **one** revision, with an approval event                                                                                                                                                              | `accept`: sets `reviewed: true`; stays open until answered / resolved | `accept`: applies the description/additions to the requirement (new revision; an approved requirement returns to `in_review` and dependants go stale) and marks the proposal `accepted`. Refused if the requirement's content changed since the proposal's base revision. Free-text proposals are only marked accepted. |
+| Edit   | structured editor; edited statements become `human_authored`; editing approved content returns it to review                                                                                                                                                               | structured editor; counts as reviewed                                 | not editable                                                                                                                                                                                                                                                                                                            |
+| Reject | `rejected`                                                                                                                                                                                                                                                                | `withdrawn` / `dismissed`                                             | `rejected`                                                                                                                                                                                                                                                                                                              |
+| Delete | `delete <ID>`: removes the live file, projection row and search chunk. `history/<ID>/` keeps every revision plus a `deleted-r<n>.json` tombstone; the ID is never reused and reconciliation never re-imports it. Open proposals for a deleted requirement become `stale`. |                                                                       |                                                                                                                                                                                                                                                                                                                         |
 
 ### Question → answer
 
@@ -270,18 +270,18 @@ only while its current content still matches that event. See ADR 0002.
 
 ## Package map
 
-| Path | Role |
-|---|---|
-| `packages/contracts` | Zod schemas shared by server, web and MCP: domain, API bodies, answer contract, model output schemas, error codes |
-| `packages/core/src/db` | `node:sqlite` open, migrations, `tx()` (BEGIN IMMEDIATE) |
-| `packages/core/src/storage` | Safe paths, atomic and create-only writes, entity Markdown format, `KnowledgeStore`, `ProjectFiles` |
-| `packages/core/src/security` | Principals and authorization, scrypt passwords, sessions, MCP tokens |
-| `packages/core/src/jobs` | Durable queue (leases, retries, cancel, recovery) and the worker loop |
-| `packages/core/src/runtime` | `AntigravityCliRuntime`, policy files, NDJSON parser, process-tree kill, demo runtime |
-| `packages/core/src/ingestion` | Type detection, extractors, chunker, worker-thread isolation |
-| `packages/core/src/retrieval` | FTS5 indexer and project-scoped search |
-| `packages/core/src/services` | Projects, sources, knowledge governance, answering, extraction, operations |
-| `packages/core/src/mcp` | MCP tool registration (official SDK v2) |
-| `apps/server` | Fastify API and MCP endpoint (`main.ts`), worker (`worker.ts`) |
-| `apps/web` | Next.js App Router UI |
-| `packages/test-fixtures` | Fictional demo project, fake `agy` for fixture playback |
+| Path                          | Role                                                                                                              |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `packages/contracts`          | Zod schemas shared by server, web and MCP: domain, API bodies, answer contract, model output schemas, error codes |
+| `packages/core/src/db`        | `node:sqlite` open, migrations, `tx()` (BEGIN IMMEDIATE)                                                          |
+| `packages/core/src/storage`   | Safe paths, atomic and create-only writes, entity Markdown format, `KnowledgeStore`, `ProjectFiles`               |
+| `packages/core/src/security`  | Principals and authorization, scrypt passwords, sessions, MCP tokens                                              |
+| `packages/core/src/jobs`      | Durable queue (leases, retries, cancel, recovery) and the worker loop                                             |
+| `packages/core/src/runtime`   | `AntigravityCliRuntime`, policy files, NDJSON parser, process-tree kill, demo runtime                             |
+| `packages/core/src/ingestion` | Type detection, extractors, chunker, worker-thread isolation                                                      |
+| `packages/core/src/retrieval` | FTS5 indexer and project-scoped search                                                                            |
+| `packages/core/src/services`  | Projects, sources, knowledge governance, answering, extraction, operations                                        |
+| `packages/core/src/mcp`       | MCP tool registration (official SDK v2)                                                                           |
+| `apps/server`                 | Fastify API and MCP endpoint (`main.ts`), worker (`worker.ts`)                                                    |
+| `apps/web`                    | Next.js App Router UI                                                                                             |
+| `packages/test-fixtures`      | Fictional demo project, fake `agy` for fixture playback                                                           |

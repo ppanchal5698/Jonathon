@@ -323,7 +323,7 @@ describe("data directory and folder-import guards", () => {
     expect(() => loadConfig({ JONATHON_DATA_DIR: dir, JONATHON_IMPORT_ROOTS: "relative/dir" } as NodeJS.ProcessEnv)).toThrow(/absolute/);
   });
 
-  it("folder import is confined to the configured import roots, including traversal and links", () => {
+  it("folder import is confined to the configured import roots, including traversal and links", async () => {
     const imports = tempDir("jon-imports-");
     const outside = tempDir("jon-outside-");
     mkdirSync(join(imports, "acme"));
@@ -332,7 +332,7 @@ describe("data directory and folder-import guards", () => {
     t = makeApp({ env: { JONATHON_IMPORT_ROOTS: imports } });
     const pid = project(t.app);
     const f = t.app.folders;
-    expect(f.scan(USER, pid, { path: join(imports, "acme"), recursive: true }).files.map((x) => x.path)).toEqual(["brief.md"]);
+    expect((await f.scan(USER, pid, { path: join(imports, "acme"), recursive: true })).files.map((x) => x.path)).toEqual(["brief.md"]);
     expect(() => f.scan(USER, pid, { path: outside, recursive: true })).toThrow(/limited to/);
     expect(() => f.scan(USER, pid, { path: join(imports, "acme", "..", "..", outside.split(/[\\/]/).pop()!), recursive: true })).toThrow(
       /limited to|does not exist/,

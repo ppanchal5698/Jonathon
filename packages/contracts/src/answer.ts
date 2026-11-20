@@ -1,13 +1,7 @@
 import { z } from "zod";
 import { ConversationIdSchema, JobIdSchema, LocatorSchema, ProjectIdSchema } from "./domain";
 
-export const ANSWER_STATUSES = [
-  "answered",
-  "partially_answered",
-  "needs_clarification",
-  "conflicting_sources",
-  "insufficient_evidence",
-] as const;
+export const ANSWER_STATUSES = ["answered", "partially_answered", "needs_clarification", "conflicting_sources", "insufficient_evidence"] as const;
 export const AnswerStatusSchema = z.enum(ANSWER_STATUSES);
 export type AnswerStatus = z.infer<typeof AnswerStatusSchema>;
 

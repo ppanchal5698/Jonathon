@@ -47,8 +47,8 @@ function DataNotice({ status }: { status: Status }) {
       <p>{status.ai_notice}</p>
       <ul className="mt-2 list-disc space-y-1 pl-5">
         <li>
-          You choose per project whether AI processing is on: the new-project form asks (ticked by default so uploads are drafted into requirements for your
-          review), and you can turn it off at any time in that project&apos;s settings.
+          You choose per project whether AI processing is on: the new-project form asks you to pick, with no default, and you can change it at any time in that
+          project&apos;s settings.
         </li>
         <li>Stored files are not encrypted by Jonathon. Protect the data folder with your operating system&apos;s disk encryption.</li>
         <li>Deleting a document in Jonathon cannot remove copies the model provider or Antigravity&apos;s own transcript store may keep.</li>
@@ -66,7 +66,10 @@ function DataNotice({ status }: { status: Status }) {
 /** First run with Sign in with Google: the first Google account to sign in becomes this Jonathon's owner. */
 function GoogleSetup({ status }: { status: Status }) {
   return (
-    <AuthLayout title="Set up Jonathon" subtitle="Sign in with your Google account. It becomes the owner of this Jonathon; Claude Code connects with separate scoped tokens.">
+    <AuthLayout
+      title="Set up Jonathon"
+      subtitle="Sign in with your Google account. It becomes the owner of this Jonathon; Claude Code connects with separate scoped tokens."
+    >
       <div className="space-y-6">
         <DataNotice status={status} />
         <GoogleSignInButton label="Continue with Google" />

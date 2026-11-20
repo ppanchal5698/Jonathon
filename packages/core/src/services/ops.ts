@@ -156,6 +156,30 @@ export class OpsService {
     return { path: dir, created_at: stamp, files: m.files.length };
   }
 
+  /**
+   * Remove records that have expired and serve no audit purpose: expired sessions, sign-in attempts older than 30 days,
+   * finished agy sign-in requests older than 7 days, expired OAuth states, old idempotency records. Never touches jobs,
+   * audit events, approvals or the MCP access log (those are pruned only by a person). Safe to run any time.
+   */
+  sweepExpired(): Record<string, number> {
+    const now = Date.now();
+    const iso = (ms: number) => new Date(now - ms).toISOString();
+    const day = 86_400_000;
+    const out: Record<string, number> = {};
+    tx(this.ctx.db, () => {
+      out.sessions = run(this.ctx.db, "DELETE FROM sessions WHERE expires_at < ?", iso(0)).changes;
+      out.login_attempts = run(this.ctx.db, "DELETE FROM login_attempts WHERE at < ?", iso(30 * day)).changes;
+      out.oauth_states = run(this.ctx.db, "DELETE FROM oauth_states WHERE expires_at < ?", iso(0)).changes;
+      out.runtime_auth_requests = run(
+        this.ctx.db,
+        "DELETE FROM runtime_auth_requests WHERE status IN ('succeeded','failed','cancelled','expired') AND updated_at < ?",
+        iso(7 * day),
+      ).changes;
+      out.http_idempotency = run(this.ctx.db, "DELETE FROM http_idempotency WHERE expires_at < ?", iso(0)).changes;
+    });
+    return out;
+  }
+
   /** Readiness for container health checks: the database answers and the data directory is writable. */
   readiness(): { ready: boolean; database: boolean; storage: boolean } {
     let database = false;

@@ -1,6 +1,15 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AntigravityCliRuntime, clearAgySignIn, createApp, createLogger, extractGoogleAuthUrl, type JonathonApp, loadConfig, type RuntimeAuthAgent } from "@jonathon/core";
+import {
+  AntigravityCliRuntime,
+  clearAgySignIn,
+  createApp,
+  createLogger,
+  extractGoogleAuthUrl,
+  type JonathonApp,
+  loadConfig,
+  type RuntimeAuthAgent,
+} from "@jonathon/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { FAKE_AGY } from "../../test-fixtures/src/index";
 import { SYSTEM, tempDir, USER } from "./helpers";
@@ -34,7 +43,9 @@ function dockerLike(scenario = "signin", opts: { managed?: boolean } = {}) {
     signInPty: false,
   });
   app = createApp(config, { runtime, log: createLogger("silent", "t") });
-  app.ctx.db.prepare("INSERT OR IGNORE INTO users (id, username, password_hash, created_at) VALUES (?,?,?,?)").run(USER.userId, USER.username, "x", new Date().toISOString());
+  app.ctx.db
+    .prepare("INSERT OR IGNORE INTO users (id, username, password_hash, created_at) VALUES (?,?,?,?)")
+    .run(USER.userId, USER.username, "x", new Date().toISOString());
   return { app, home, runtime };
 }
 
@@ -47,11 +58,13 @@ async function until<T>(fn: () => T | undefined | false, ms = 15_000): Promise<T
     await new Promise((r) => setTimeout(r, 50));
   }
 }
-const settled = (a: JonathonApp, id: string) => until(() => {
-  const r = a.runtimeAuth.get(USER, id);
-  return ["succeeded", "failed", "cancelled", "expired"].includes(r.status) ? r : undefined;
-});
-const storedCode = (a: JonathonApp, id: string) => (a.ctx.db.prepare("SELECT code FROM runtime_auth_requests WHERE id = ?").get(id) as { code: string | null }).code;
+const settled = (a: JonathonApp, id: string) =>
+  until(() => {
+    const r = a.runtimeAuth.get(USER, id);
+    return ["succeeded", "failed", "cancelled", "expired"].includes(r.status) ? r : undefined;
+  });
+const storedCode = (a: JonathonApp, id: string) =>
+  (a.ctx.db.prepare("SELECT code FROM runtime_auth_requests WHERE id = ?").get(id) as { code: string | null }).code;
 
 describe("Sign in with Google for agy in the Docker worker", () => {
   it("signs in with the pasted code, rejects a wrong code, and signs out again", async () => {
@@ -92,8 +105,20 @@ describe("Sign in with Google for agy in the Docker worker", () => {
     expect(existsSync(tokenFile)).toBe(false);
     expect(a.runtimeAuth.status(USER).runtime?.auth).toMatchObject({ status: "auth_required" });
 
-    const actions = (a.ctx.db.prepare("SELECT action, actor_kind FROM audit_events WHERE action LIKE 'runtime.%' ORDER BY at").all() as { action: string; actor_kind: string }[]).map((x) => x.action);
-    expect(actions).toEqual(["runtime.sign_in_requested", "runtime.sign_in_failed", "runtime.sign_in_requested", "runtime.signed_in", "runtime.sign_out_requested", "runtime.signed_out"]);
+    const actions = (
+      a.ctx.db.prepare("SELECT action, actor_kind FROM audit_events WHERE action LIKE 'runtime.%' ORDER BY at").all() as {
+        action: string;
+        actor_kind: string;
+      }[]
+    ).map((x) => x.action);
+    expect(actions).toEqual([
+      "runtime.sign_in_requested",
+      "runtime.sign_in_failed",
+      "runtime.sign_in_requested",
+      "runtime.signed_in",
+      "runtime.sign_out_requested",
+      "runtime.signed_out",
+    ]);
     // The code and the link never reach the audit log.
     expect(JSON.stringify(a.ctx.db.prepare("SELECT details FROM audit_events").all())).not.toMatch(/fixture-code|accounts\.google/);
   });

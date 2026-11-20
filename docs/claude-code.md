@@ -28,15 +28,15 @@ Check it with `claude mcp list`, or with `/mcp` inside Claude Code.
 
 ## 3. Tools
 
-| Tool | Scope | Purpose |
-|---|---|---|
-| `list_projects` | read | Projects this token can access |
-| `ask_jonathon` | read | Question with citations. Pass `conversation_id` for follow-ups, `feature_scope` for readiness, `request_id` for idempotency |
-| `search_knowledge` | read | Search evidence and knowledge |
-| `get_requirement` | read | One entity (REQ-, DEC-, QUESTION-, CONFLICT-, CHANGE-). `approval_valid` tells you whether it is approved |
-| `get_feature_spec` | read | Approved requirements and decisions for a feature, with server-computed `implementation_ready` and reasons |
-| `get_job` | read | Poll a pending job and get the answer when done |
-| `propose_requirement_change` | propose | File a proposal against the requirement's **current** revision. It is never applied automatically |
+| Tool                         | Scope   | Purpose                                                                                                                     |
+| ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `list_projects`              | read    | Projects this token can access                                                                                              |
+| `ask_jonathon`               | read    | Question with citations. Pass `conversation_id` for follow-ups, `feature_scope` for readiness, `request_id` for idempotency |
+| `search_knowledge`           | read    | Search evidence and knowledge                                                                                               |
+| `get_requirement`            | read    | One entity (REQ-, DEC-, QUESTION-, CONFLICT-, CHANGE-). `approval_valid` tells you whether it is approved                   |
+| `get_feature_spec`           | read    | Approved requirements and decisions for a feature, with server-computed `implementation_ready` and reasons                  |
+| `get_job`                    | read    | Poll a pending job and get the answer when done                                                                             |
+| `propose_requirement_change` | propose | File a proposal against the requirement's **current** revision. It is never applied automatically                           |
 
 There is deliberately no approval tool, no general write tool and no shell tool.
 

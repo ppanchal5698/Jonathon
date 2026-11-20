@@ -60,7 +60,8 @@ export interface JonathonApp {
 export function createRuntime(config: JonathonConfig, log: Logger): ReasoningRuntime {
   if (config.mode === "demo") return new DemoExtractiveRuntime();
   return new AntigravityCliRuntime({
-    dataDir: config.dataDir,
+    // Policy files and empty working folders: under JONATHON_RUNTIME_DIR (Docker: a tmpfs, outside /data).
+    dataDir: config.runtimeDir,
     executable: config.runtime.agyPath,
     argsPrefix: config.runtime.agyArgsPrefix,
     model: config.runtime.model,
@@ -148,6 +149,7 @@ export function createApp(config: JonathonConfig, opts: { runtime?: ReasoningRun
         answer: (jc) => answers.runAnswerJob(jc),
         extract_knowledge: (jc) => extraction.runExtractKnowledgeJob(jc),
         reindex: (jc) => ops.runReindexJob(jc),
+        reconcile: async (jc) => ({ status: "succeeded", result: ops.reconcile({ kind: "system", name: "worker" }, jc.job.projectId)[0] ?? null }),
         graph_extract: (jc) => graph.runGraphExtractJob(jc),
         generate_documents: (jc) => documents.runGenerateJob(jc),
         import_folder: (jc) => folders.runImportJob(jc),

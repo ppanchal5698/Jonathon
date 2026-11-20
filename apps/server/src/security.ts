@@ -44,7 +44,12 @@ export function readCookie(req: FastifyRequest, name: string): string | undefine
   for (const part of raw.split(";")) {
     const i = part.indexOf("=");
     if (i === -1) continue;
-    if (part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+    if (part.slice(0, i).trim() !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(i + 1).trim());
+    } catch {
+      return undefined; // malformed %-escape: treat as no cookie (401), never a 500
+    }
   }
   return undefined;
 }

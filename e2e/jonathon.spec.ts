@@ -22,17 +22,21 @@ test("full workflow", async ({ page }) => {
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
 
-  // ---- Create project (the AI-processing consent box is shown and ticked by default) ----
+  // ---- Create project (AI processing is an explicit choice: nothing pre-selected, Create disabled until chosen) ----
   await page.getByRole("button", { name: "New project" }).click();
   await page.getByLabel("Project name").fill("E2E portal");
-  await expect(page.getByRole("checkbox", { name: /Draft requirements from uploaded documents with AI/ })).toBeChecked();
+  await expect(page.getByRole("button", { name: "Create", exact: true })).toBeDisabled();
+  await page.getByRole("radio", { name: /Draft requirements from uploaded documents with AI/ }).check();
   await page.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page.getByRole("heading", { name: /E2E portal/ })).toBeVisible();
+  // First visit to the project page compiles it in Next.js dev mode (can take well over the 5 s default).
+  await expect(page.getByRole("heading", { name: /E2E portal/ })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText("AI processing on")).toBeVisible();
 
   // ---- Upload multiple files ----
   await page.getByRole("tab", { name: "Documents" }).click();
-  await page.locator('input[type="file"]').setInputFiles([join(DEMO, "01-initial-requirements.md"), join(DEMO, "02-follow-up-email.eml"), join(DEMO, "AGENTS.md")]);
+  await page
+    .locator('input[type="file"]')
+    .setInputFiles([join(DEMO, "01-initial-requirements.md"), join(DEMO, "02-follow-up-email.eml"), join(DEMO, "AGENTS.md")]);
   await expect(page.getByText(/3 file\(s\) stored/)).toBeVisible();
   await expect(page.getByRole("link", { name: "01-initial-requirements.md" })).toBeVisible();
   await expect.poll(async () => page.getByText("succeeded").count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(3);
@@ -87,7 +91,10 @@ test("full workflow", async ({ page }) => {
   await page.getByLabel("Feature scope (optional)").fill("email-verification");
   await page.getByRole("button", { name: /Ask/ }).click();
   await expect(page.getByText("Sources")).toBeVisible({ timeout: 45_000 });
-  await page.getByRole("button", { name: /cite_1/ }).first().click();
+  await page
+    .getByRole("button", { name: /cite_1/ })
+    .first()
+    .click();
   await expect(page.getByText("Quote check")).toBeVisible();
   await expect(page.getByText(/found verbatim|NOT found/)).toBeVisible();
   // Follow-up in the same conversation
@@ -101,7 +108,11 @@ test("full workflow", async ({ page }) => {
   await page.getByLabel("Title").fill("Minimum password length: 8 or 12");
   await page.getByLabel("Description").fill("Requirements say 8 characters; business rules say 12.");
   await page.getByRole("button", { name: "Create draft" }).click();
-  await page.getByRole("row", { name: /Minimum password length: 8 or 12/ }).getByRole("link").first().click();
+  await page
+    .getByRole("row", { name: /Minimum password length: 8 or 12/ })
+    .getByRole("link")
+    .first()
+    .click();
   await page.getByLabel(/Selected outcome/).fill("12 characters minimum.");
   await page.getByLabel("Rationale").fill("Client confirmed by phone on 16 Nov.");
   // AI drafting may already have created conflicts, so read this one's ID from the confirmation label.
@@ -115,8 +126,14 @@ test("full workflow", async ({ page }) => {
   await page.goto(page.url().replace(/\/projects\/([^/?]+).*/, "/projects/$1?tab=techdocs"));
   await expect(page.getByText("Technical documentation")).toBeVisible();
   // The SRS: the e2e documents state requirements, so it has client evidence, compiled requirements and written sections.
-  await page.getByRole("row", { name: /Software Requirements Specification/ }).getByRole("button", { name: "Generate" }).click();
-  await page.getByRole("row", { name: /Software Requirements Specification/ }).getByRole("link", { name: /Software Requirements Specification/ }).click({ timeout: 150_000 });
+  await page
+    .getByRole("row", { name: /Software Requirements Specification/ })
+    .getByRole("button", { name: "Generate" })
+    .click();
+  await page
+    .getByRole("row", { name: /Software Requirements Specification/ })
+    .getByRole("link", { name: /Software Requirements Specification/ })
+    .click({ timeout: 150_000 });
   await expect(page.getByRole("heading", { name: "Functional requirements", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: /^REQ-\d+$/ }).first()).toBeVisible();
   await expect(page.getByText(/^Gap:/).first()).toBeVisible();
@@ -147,7 +164,9 @@ test("full workflow", async ({ page }) => {
   await expect(page.getByText("New credential (shown once)")).toBeVisible();
   await expect(page.locator("pre").first()).toContainText("jon_");
   await page.getByRole("button", { name: "I stored it" }).click();
-  page.once("dialog", (d) => d.accept());
+  // Revoking asks in the app's own dialog (not the browser's confirm()).
   await page.getByRole("button", { name: "Revoke" }).click();
+  await expect(page.getByRole("dialog")).toContainText("stop working immediately");
+  await page.getByRole("dialog").getByRole("button", { name: "Revoke" }).click();
   await expect(page.getByText("revoked")).toBeVisible();
 });

@@ -36,7 +36,6 @@ export interface EntityDoc {
   source_refs: SourceRef[];
 }
 
-
 /** Unrecognized `## headings` are preserved verbatim here so manual edits are never dropped. */
 export const EXTRA_SECTION = "_extra";
 
@@ -55,7 +54,12 @@ export function normalizeFields(type: EntityType, input: Record<string, unknown>
   for (const [key, kind] of Object.entries(spec.fields)) {
     const v = input[key];
     if (kind === "string_list") {
-      out[key] = Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean).slice(0, 100) : [];
+      out[key] = Array.isArray(v)
+        ? v
+            .map((x) => String(x).trim())
+            .filter(Boolean)
+            .slice(0, 100)
+        : [];
     } else if (kind === "boolean") {
       out[key] = v === true || v === "true";
     } else if (kind === "number") {

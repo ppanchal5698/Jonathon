@@ -6,9 +6,10 @@ import { createApp, createLogger, DemoExtractiveRuntime, type JonathonApp, loadC
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer } from "../src/server";
+import { freePort } from "./free-port";
 
-const PORT = 49_100 + Math.floor(Math.random() * 800);
-const BASE = `http://127.0.0.1:${PORT}`;
+let PORT = 0;
+let BASE = "";
 let app: JonathonApp;
 let server: FastifyInstance;
 let dataDir: string;
@@ -42,6 +43,8 @@ function rawGet(path: string, host: string): Promise<number> {
 }
 
 beforeAll(async () => {
+  PORT = await freePort();
+  BASE = `http://127.0.0.1:${PORT}`;
   dataDir = mkdtempSync(join(tmpdir(), "jon-ops-"));
   const config = loadConfig({
     JONATHON_DATA_DIR: dataDir,
@@ -172,7 +175,10 @@ describe("dead letters and replay over HTTP", () => {
 describe("project deletion over HTTP", () => {
   it("needs the session, the CSRF token and the exact phrase; MCP bearer tokens cannot reach it", async () => {
     const pid = (await api("POST", "/api/v1/projects", { name: "Delete Me" })).json?.data.id as string;
-    const token = app.auth.createMcpToken({ kind: "user", userId: "x", username: "parth" }, { name: "c", projectIds: [pid], scopes: ["read", "propose"] }).token;
+    const token = app.auth.createMcpToken(
+      { kind: "user", userId: "x", username: "parth" },
+      { name: "c", projectIds: [pid], scopes: ["read", "propose"] },
+    ).token;
     const viaBearer = await fetch(`${BASE}/api/v1/projects/${pid}`, {
       method: "DELETE",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -192,5 +198,66 @@ describe("project deletion over HTTP", () => {
     expect(ok.json?.data).toMatchObject({ deleted: pid, name: "Delete Me" });
     expect((await api("GET", `/api/v1/projects/${pid}`)).status).toBe(404);
     expect((await api("DELETE", `/api/v1/projects/${pid}`, { confirmation: "delete Delete Me" })).status).toBe(404);
+  });
+});
+
+describe("hardening from the code review", () => {
+  it("a malformed session cookie is treated as signed out (401), never a server error", async () => {
+    const r = await fetch(`${BASE}/api/v1/projects`, { headers: { cookie: "jon_session=%E0%A4%A" } });
+    expect(r.status).toBe(401);
+  });
+
+  it("the job status filter is validated and applied before the limit", async () => {
+    expect((await api("GET", "/api/v1/jobs?status=not-a-status")).status).toBe(400);
+    const pid = (await api("POST", "/api/v1/projects", { name: "Filter" })).json?.data.id as string;
+    const q = app.ctx.queue;
+    const old = q.enqueue({ projectId: pid, type: "reindex", payload: { n: 0 }, createdBy: "t" });
+    app.ctx.db.prepare("UPDATE jobs SET created_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(old.id);
+    for (let i = 0; i < 205; i++) {
+      const j = q.enqueue({ projectId: pid, type: "reindex", payload: { n: i + 1 }, createdBy: "t" });
+      app.ctx.db.prepare("UPDATE jobs SET status = 'succeeded' WHERE id = ?").run(j.id);
+    }
+    const queued = (await api("GET", "/api/v1/jobs?status=queued")).json?.data as { id: string }[];
+    expect(queued.map((j) => j.id)).toContain(old.id);
+  });
+
+  it("an MCP token is limited in AI questions in flight and in calls per minute", async () => {
+    const pid = (await api("POST", "/api/v1/projects", { name: "MCP limits" })).json?.data.id as string;
+    const t = app.auth.createMcpToken({ kind: "user", userId: "x", username: "parth" }, { name: "limits", projectIds: [pid], scopes: ["read"] });
+    const mcp = { kind: "mcp_token" as const, tokenId: t.id, name: "limits", projectIds: [pid], scopes: ["read" as const] };
+    for (let i = 0; i < app.ctx.config.mcpLimits.maxActiveAsks; i++) await app.answers.ask(mcp, pid, { message: `question ${i}` }, { waitMs: 0 });
+    await expect(app.answers.ask(mcp, pid, { message: "one too many" }, { waitMs: 0 })).rejects.toThrow(/questions in progress/);
+    // The signed-in person is not limited by MCP quotas.
+    await app.answers.ask({ kind: "user", userId: "x", username: "parth" }, pid, { message: "human question" }, { waitMs: 0 });
+
+    const now = new Date().toISOString();
+    const ins = app.ctx.db.prepare("INSERT INTO mcp_access_log (id, token_id, at, tool, project_id, outcome) VALUES (?,?,?,?,?, 'ok')");
+    for (let i = 0; i < app.ctx.config.mcpLimits.callsPerMinute; i++) ins.run(`mal_t${i}`, t.id, now, "list_projects", null);
+    const r = await fetch(`${BASE}/mcp`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${t.token}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_projects", arguments: {} } }),
+    });
+    expect(JSON.stringify(await r.json())).toMatch(/RATE_LIMITED/);
+  });
+
+  it("expired sessions, OAuth states and old finished sign-in requests are swept; jobs and audit are kept", () => {
+    const db = app.ctx.db;
+    const past = "2000-01-01T00:00:00.000Z";
+    const user = db.prepare("SELECT id FROM users LIMIT 1").get() as { id: string };
+    db.prepare(
+      "INSERT INTO sessions (id, user_id, token_hash, csrf_token, created_at, expires_at, last_seen_at) VALUES ('ses_old', ?, 'h_old', 'c', ?, ?, ?)",
+    ).run(user.id, past, past, past);
+    db.prepare("INSERT INTO oauth_states (state, binder_hash, code_verifier, nonce, created_at, expires_at) VALUES ('s_old','b','v','n',?,?)").run(past, past);
+    db.prepare(
+      "INSERT INTO runtime_auth_requests (id, action, status, requested_by_id, requested_by_name, created_at, updated_at) VALUES ('rta_old','check','succeeded','x','parth',?,?)",
+    ).run(past, past);
+    const jobsBefore = (db.prepare("SELECT COUNT(*) AS n FROM jobs").get() as { n: number }).n;
+    const auditBefore = (db.prepare("SELECT COUNT(*) AS n FROM audit_events").get() as { n: number }).n;
+    const n = app.ops.sweepExpired();
+    expect(n).toMatchObject({ sessions: 1, oauth_states: 1, runtime_auth_requests: 1 });
+    expect((db.prepare("SELECT COUNT(*) AS n FROM jobs").get() as { n: number }).n).toBe(jobsBefore);
+    expect((db.prepare("SELECT COUNT(*) AS n FROM audit_events").get() as { n: number }).n).toBe(auditBefore);
+    expect((db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE id <> 'ses_old'").get() as { n: number }).n).toBeGreaterThan(0); // the live session stays
   });
 });

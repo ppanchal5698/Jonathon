@@ -3,12 +3,13 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 
-const bool = z
-  .union([z.boolean(), z.string()])
-  .transform((v) => (typeof v === "boolean" ? v : ["1", "true", "yes", "on"].includes(v.toLowerCase())));
+const bool = z.union([z.boolean(), z.string()]).transform((v) => (typeof v === "boolean" ? v : ["1", "true", "yes", "on"].includes(v.toLowerCase())));
 
 /** Docker Compose passes unset variables as "": treat that as not set. */
-const emptyAsUnset = z.string().optional().transform((v) => (v?.trim() ? v.trim() : undefined));
+const emptyAsUnset = z
+  .string()
+  .optional()
+  .transform((v) => (v?.trim() ? v.trim() : undefined));
 
 const EnvSchema = z.object({
   JONATHON_MODE: z.enum(["live", "demo"]).default("live"),
@@ -16,7 +17,12 @@ const EnvSchema = z.object({
   JONATHON_HOST: z.string().default("127.0.0.1"),
   JONATHON_PORT: z.coerce.number().int().default(4100),
   JONATHON_WEB_ORIGINS: z.string().default("http://127.0.0.1:3005,http://localhost:3005"),
-  JONATHON_SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(12),
+  JONATHON_SESSION_TTL_HOURS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(24 * 30)
+    .default(12),
   JONATHON_MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(500).default(50),
   JONATHON_ASK_WAIT_MS: z.coerce.number().int().min(0).max(60_000).default(25_000),
   JONATHON_LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
@@ -65,6 +71,19 @@ const EnvSchema = z.object({
    * JONATHON_INIT_NEW_DATA_DIR=true is given explicitly.
    */
   JONATHON_REQUIRE_EXISTING_DATA: bool.default(false),
+  /**
+   * Separate MCP listener. When set, the API serves REST on JONATHON_PORT and MCP (plus health) on this port only, so the
+   * MCP port can be published to Claude Code without exposing /api/v1. Unset: one listener serves both (native default).
+   */
+  JONATHON_MCP_PORT: z.preprocess((v) => (typeof v === "string" && !v.trim() ? undefined : v), z.coerce.number().int().min(1).max(65_535).optional()),
+  /**
+   * Where agy's policy files and empty working folders live (default: the data directory). Docker points this at a
+   * tmpfs, so no client-data path appears in agy's working directory or arguments.
+   */
+  JONATHON_RUNTIME_DIR: emptyAsUnset,
+  /** MCP abuse limits per token: AI questions in flight, and tool calls per minute. */
+  JONATHON_MCP_MAX_ACTIVE_ASKS: z.coerce.number().int().min(1).max(50).default(3),
+  JONATHON_MCP_CALLS_PER_MINUTE: z.coerce.number().int().min(10).max(10_000).default(120),
   /** Docker: the API container has no agy; runtime diagnostics and authentication checks are answered by the worker. */
   JONATHON_RUNTIME_IN_WORKER: bool.default(false),
   /**
@@ -89,7 +108,7 @@ const EnvSchema = z.object({
    * to the API's callback (apps/web/next.config.ts).
    */
   JONATHON_GOOGLE_REDIRECT_PATH: emptyAsUnset.pipe(z.enum(["/api/v1/auth/google/callback", "/oauth2callback"]).default("/api/v1/auth/google/callback")),
-  /** Optional: only these Google accounts (comma-separated emails) may sign in. Otherwise the first sign-in claims the install. */
+  /** Required with Sign in with Google: the Google accounts (comma-separated emails) that may sign in. */
   JONATHON_GOOGLE_ALLOWED_EMAILS: z.string().default(""),
   /** The browser-facing UI origin, used for the OAuth redirect URI. Default: the first JONATHON_WEB_ORIGINS entry. */
   JONATHON_PUBLIC_URL: emptyAsUnset.pipe(
@@ -114,8 +133,17 @@ const EnvSchema = z.object({
   AGY_MAX_CONCURRENT: z.coerce.number().int().min(1).max(16).default(4),
   /** Team workflow: specialist agents plus verifiers. Off = the earlier single-agent drafting and unverified answers. */
   JONATHON_AGENT_TEAM: bool.default(true),
-  AGY_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(30 * 60_000).default(240_000),
-  AGY_MAX_OUTPUT_BYTES: z.coerce.number().int().min(64_000).default(4 * 1024 * 1024),
+  AGY_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(5_000)
+    .max(30 * 60_000)
+    .default(240_000),
+  AGY_MAX_OUTPUT_BYTES: z.coerce
+    .number()
+    .int()
+    .min(64_000)
+    .default(4 * 1024 * 1024),
   AGY_MAX_PROMPT_CHARS: z.coerce.number().int().min(10_000).max(2_000_000).default(200_000),
   JONATHON_RETRIEVAL_ITERATIONS: z.coerce.number().int().min(0).max(3).default(2),
   JONATHON_REPAIR_ATTEMPTS: z.coerce.number().int().min(0).max(2).default(1),
@@ -150,6 +178,11 @@ export type JonathonConfig = {
   importRoots: string[];
   requireExistingData: boolean;
   runtimeInWorker: boolean;
+  /** Separate MCP listener port, or null for one listener serving REST and MCP. */
+  mcpPort: number | null;
+  /** Root for runtime-policy/ and runtime-workspaces/ (defaults to dataDir). */
+  runtimeDir: string;
+  mcpLimits: { maxActiveAsks: number; callsPerMinute: number };
   /** Set only inside a container: the dedicated agy home whose sign-in Jonathon manages. */
   agyHome: string | null;
   /** Set when Sign in with Google is configured; then it is the only sign-in method. */
@@ -204,20 +237,42 @@ function googleConfig(e: z.infer<typeof EnvSchema>, env: NodeJS.ProcessEnv): Jon
     return null;
   }
   if (!e.JONATHON_GOOGLE_CLIENT_SECRET) throw new Error("JONATHON_GOOGLE_CLIENT_ID is set but JONATHON_GOOGLE_CLIENT_SECRET is missing");
-  const origins = e.JONATHON_WEB_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean);
+  const origins = e.JONATHON_WEB_ORIGINS.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
   const publicUrl = e.JONATHON_PUBLIC_URL ?? origins.find((o) => o.includes("localhost")) ?? origins[0];
   if (!publicUrl) throw new Error("set JONATHON_PUBLIC_URL for the Google redirect URI");
   if (!origins.includes(publicUrl)) throw new Error(`JONATHON_PUBLIC_URL (${publicUrl}) must be one of JONATHON_WEB_ORIGINS`);
+  const allowedEmails = e.JONATHON_GOOGLE_ALLOWED_EMAILS.split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  // Without a list, whoever signs in first would own the install. Make the owner explicit.
+  if (!allowedEmails.length)
+    throw new Error("JONATHON_GOOGLE_ALLOWED_EMAILS is required with Sign in with Google: list the Google account(s) that may sign in");
+  for (const a of allowedEmails)
+    if (!/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(a)) throw new Error(`JONATHON_GOOGLE_ALLOWED_EMAILS entry "${a}" is not an email address`);
   const testHooks = e.JONATHON_ALLOW_TEST_HOOKS;
   if (!testHooks && (env.JONATHON_GOOGLE_AUTH_URL || env.JONATHON_GOOGLE_TOKEN_URL)) throw new Error("Google endpoint overrides are for tests only");
   return {
     clientId: e.JONATHON_GOOGLE_CLIENT_ID,
     clientSecret: e.JONATHON_GOOGLE_CLIENT_SECRET,
-    allowedEmails: e.JONATHON_GOOGLE_ALLOWED_EMAILS.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+    allowedEmails,
     redirectUri: `${publicUrl}${e.JONATHON_GOOGLE_REDIRECT_PATH}`,
     authUrl: (testHooks && e.JONATHON_GOOGLE_AUTH_URL) || "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: (testHooks && e.JONATHON_GOOGLE_TOKEN_URL) || "https://oauth2.googleapis.com/token",
   };
+}
+
+function mcpPort(e: z.infer<typeof EnvSchema>): number | null {
+  if (e.JONATHON_MCP_PORT === undefined) return null;
+  if (e.JONATHON_MCP_PORT === e.JONATHON_PORT) throw new Error("JONATHON_MCP_PORT must differ from JONATHON_PORT");
+  return e.JONATHON_MCP_PORT;
+}
+
+function runtimeDir(raw: string | undefined, dataDir: string): string {
+  if (!raw) return dataDir;
+  if (!isAbsolute(raw) || resolve(raw) === resolve("/")) throw new Error("JONATHON_RUNTIME_DIR must be an absolute directory");
+  return resolve(raw);
 }
 
 function agyHome(raw: string | undefined, container: boolean): string | null {
@@ -296,10 +351,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, repoRoot = find
     },
     container,
     allowedHosts,
-    mcpPublicUrl: e.JONATHON_MCP_PUBLIC_URL ?? `http://127.0.0.1:${e.JONATHON_PORT}/mcp`,
+    mcpPublicUrl: e.JONATHON_MCP_PUBLIC_URL ?? `http://127.0.0.1:${e.JONATHON_MCP_PORT ?? e.JONATHON_PORT}/mcp`,
     importRoots: importRoots.map((r) => resolve(r)),
     requireExistingData: e.JONATHON_REQUIRE_EXISTING_DATA,
     runtimeInWorker: e.JONATHON_RUNTIME_IN_WORKER,
+    mcpPort: mcpPort(e),
+    runtimeDir: runtimeDir(e.JONATHON_RUNTIME_DIR, dataDir),
+    mcpLimits: { maxActiveAsks: e.JONATHON_MCP_MAX_ACTIVE_ASKS, callsPerMinute: e.JONATHON_MCP_CALLS_PER_MINUTE },
     agyHome: agyHome(e.JONATHON_AGY_HOME, container),
     google: googleConfig(e, env),
     runtime: {

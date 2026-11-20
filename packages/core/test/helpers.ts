@@ -40,7 +40,9 @@ export function makeApp(opts: { scenario?: string; runtime?: ReasoningRuntime; d
   const runtime = opts.runtime ?? fakeRuntime(dataDir, opts.scenario ?? "answer-cite");
   const app = createApp(config, { runtime, log: createLogger("silent", "test") });
   // Tests act as the local user: create the account row so approval events reference a real user id.
-  app.ctx.db.prepare("INSERT OR IGNORE INTO users (id, username, password_hash, created_at) VALUES (?,?,?,?)").run(USER.userId, USER.username, "x", new Date().toISOString());
+  app.ctx.db
+    .prepare("INSERT OR IGNORE INTO users (id, username, password_hash, created_at) VALUES (?,?,?,?)")
+    .run(USER.userId, USER.username, "x", new Date().toISOString());
   return {
     app,
     dataDir,

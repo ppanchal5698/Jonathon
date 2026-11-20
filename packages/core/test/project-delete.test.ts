@@ -27,7 +27,9 @@ afterEach(() => {
 });
 
 const rows = (app: TestApp["app"], pid: string) =>
-  Object.fromEntries(PROJECT_TABLES.map((tb) => [tb, (app.ctx.db.prepare(`SELECT COUNT(*) AS n FROM ${tb} WHERE project_id = ?`).get(pid) as { n: number }).n]));
+  Object.fromEntries(
+    PROJECT_TABLES.map((tb) => [tb, (app.ctx.db.prepare(`SELECT COUNT(*) AS n FROM ${tb} WHERE project_id = ?`).get(pid) as { n: number }).n]),
+  );
 
 describe("deleting a whole project", () => {
   it("removes every file and row of that project, keeps other projects intact, narrows MCP tokens and leaves an audit record", async () => {
@@ -45,7 +47,9 @@ describe("deleting a whole project", () => {
     const name = t.app.projects.get(USER, pid).name;
     expect(() => t!.app.projects.delete(USER, pid, "delete")).toThrow(/to confirm/);
     expect(() => t!.app.projects.delete(SYSTEM, pid, `delete ${name}`)).toThrow(/only the signed-in human/);
-    expect(() => t!.app.projects.delete({ kind: "mcp_token", tokenId: "x", name: "c", projectIds: [pid], scopes: ["read", "propose"] }, pid, `delete ${name}`)).toThrow();
+    expect(() =>
+      t!.app.projects.delete({ kind: "mcp_token", tokenId: "x", name: "c", projectIds: [pid], scopes: ["read", "propose"] }, pid, `delete ${name}`),
+    ).toThrow();
 
     const r = t.app.projects.delete(USER, pid, `delete ${name}`);
     expect(r).toMatchObject({ deleted: pid, name });

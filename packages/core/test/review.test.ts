@@ -90,7 +90,11 @@ describe("documents → proposed knowledge → human review", () => {
     expect(after.human_id).toBe("REQ-001");
     expect(after.status).toBe("in_review");
     expect(after.approval_valid).toBe(false);
-    expect((after.sections.acceptance_criteria as { text: string; basis: string; review_state: string }[]).some((s) => s.text === "AI-suggested follow-up criterion" && s.basis === "ai_inferred" && s.review_state === "accepted")).toBe(true);
+    expect(
+      (after.sections.acceptance_criteria as { text: string; basis: string; review_state: string }[]).some(
+        (s) => s.text === "AI-suggested follow-up criterion" && s.basis === "ai_inferred" && s.review_state === "accepted",
+      ),
+    ).toBe(true);
     expect(after.source_refs.length).toBeGreaterThan(before.source_refs.length);
   });
 
@@ -102,7 +106,9 @@ describe("documents → proposed knowledge → human review", () => {
     const p = t.app.knowledge.list(USER, pid, { types: ["change_proposal"] })[0]!;
     const r = t.app.knowledge.get(USER, pid, "REQ-001");
     t.app.knowledge.updateDraft(USER, pid, "REQ-001", r.revision, { title: "Email verification (edited)" });
-    expect(() => t.app.knowledge.accept(USER, pid, p.human_id, { expected_revision: p.revision, confirmation: `accept ${p.human_id}` })).toThrow(/changed since/);
+    expect(() => t.app.knowledge.accept(USER, pid, p.human_id, { expected_revision: p.revision, confirmation: `accept ${p.human_id}` })).toThrow(
+      /changed since/,
+    );
     const rej = t.app.knowledge.reject(USER, pid, p.human_id, { expected_revision: p.revision, confirmation: `reject ${p.human_id}` });
     expect(rej.status).toBe("rejected");
   });
@@ -157,8 +163,14 @@ describe("documents → proposed knowledge → human review", () => {
   it("conflicts are found across documents, with this document on side 1, and nothing is drafted from the other one", async () => {
     t = makeApp({ scenario: "extraction" });
     const pid = t.app.projects.create(USER, { name: "Cross", ai_enabled: true }).id;
-    const spec = t.app.sources.ingest(USER, pid, { filename: "spec.md", bytes: enc("The pricing platform must store data in Azure SQL with private endpoints.") });
-    const plan = t.app.sources.ingest(USER, pid, { filename: "tracker.md", bytes: enc("Task 3.3: provision PostgreSQL Flexible Server for the pricing platform data, with backups.") });
+    const spec = t.app.sources.ingest(USER, pid, {
+      filename: "spec.md",
+      bytes: enc("The pricing platform must store data in Azure SQL with private endpoints."),
+    });
+    const plan = t.app.sources.ingest(USER, pid, {
+      filename: "tracker.md",
+      bytes: enc("Task 3.3: provision PostgreSQL Flexible Server for the pricing platform data, with backups."),
+    });
     await drainJobs(t.app, ["ingest"]);
     await drainJobs(t.app, ["extract_knowledge"]);
     const conflicts = t.app.knowledge.list(USER, pid, { types: ["conflict"] }).filter((c) => c.title.startsWith("Cross-document"));
@@ -191,8 +203,18 @@ describe("documents → proposed knowledge → human review", () => {
 
   it("duplicate detection on paraphrases seen in real client documents", () => {
     // Questions the model raised three times from three documents.
-    expect(similarQuestion("What is the minimum margin for special job prices, and who approves below it?", "What is the minimum margin threshold for special job prices that requires manager approval?")).toBe(true);
-    expect(similarQuestion("Which vendors keep the 5% burden, and why?", "Which specific vendors keep the 5% burden and under what criteria is burden applied or removed?")).toBe(true);
+    expect(
+      similarQuestion(
+        "What is the minimum margin for special job prices, and who approves below it?",
+        "What is the minimum margin threshold for special job prices that requires manager approval?",
+      ),
+    ).toBe(true);
+    expect(
+      similarQuestion(
+        "Which vendors keep the 5% burden, and why?",
+        "Which specific vendors keep the 5% burden and under what criteria is burden applied or removed?",
+      ),
+    ).toBe(true);
     expect(similarQuestion("Who keeps truck freight rates current?", "Which pilot vendors are in Phase 1?")).toBe(false);
     // Different client IDs or numbers are never merged.
     expect(similar("FR-10 Search products by SKU", "FR-11 Search products by SKU and name")).toBe(false);
@@ -203,14 +225,18 @@ describe("documents → proposed knowledge → human review", () => {
   });
 
   it("excerpts show the matching lines and search terms favour names and numbers", () => {
-    const sheet = Array.from({ length: 40 }, (_, i) => (i === 29 ? "Row 30: Task = PostgreSQL Flexible Server, backups" : `Row ${i + 1}: Task = Filler work item ${i}`)).join("\n");
+    const sheet = Array.from({ length: 40 }, (_, i) =>
+      i === 29 ? "Row 30: Task = PostgreSQL Flexible Server, backups" : `Row ${i + 1}: Task = Filler work item ${i}`,
+    ).join("\n");
     const ex = bestExcerpt(sheet, "Azure SQL vs PostgreSQL Flexible Server", 120);
     expect(ex).toContain("Row 30: Task = PostgreSQL Flexible Server");
     expect(ex.length).toBeLessThanOrEqual(120);
     const terms = keyTerms("The platform uses Azure SQL. The platform stores rules. Angular frontend, .NET backend, 500 rows.", 5);
     expect(terms).toEqual(expect.arrayContaining(["azure", "sql", "angular", "500"]));
     expect(terms).not.toContain("the");
-    expect(topicTerms("Task 3.3: PostgreSQL Flexible Server, backups; FastAPI service; React portal")).toEqual(expect.arrayContaining(["database", "backend", "frontend"]));
+    expect(topicTerms("Task 3.3: PostgreSQL Flexible Server, backups; FastAPI service; React portal")).toEqual(
+      expect.arrayContaining(["database", "backend", "frontend"]),
+    );
     expect(topicTerms("Customers must verify their email address")).toEqual([]);
   });
 

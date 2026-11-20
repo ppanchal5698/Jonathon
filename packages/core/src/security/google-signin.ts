@@ -79,13 +79,21 @@ export class GoogleSignIn {
   }
 
   /** Finish a sign-in. Throws UNAUTHENTICATED/FORBIDDEN with a message safe to show. */
-  async callback(q: { state?: string; code?: string; error?: string }, binder: string | undefined): Promise<{ token: string; session: SessionInfo; created: boolean }> {
+  async callback(
+    q: { state?: string; code?: string; error?: string },
+    binder: string | undefined,
+  ): Promise<{ token: string; session: SessionInfo; created: boolean }> {
     const g = this.g;
     if (q.error) throw new AppError("UNAUTHENTICATED", q.error === "access_denied" ? "Google sign-in was cancelled" : "Google did not complete the sign-in");
-    if (!q.state || !q.code || q.state.length > 200 || q.code.length > 2_000) throw new AppError("UNAUTHENTICATED", "the sign-in response is incomplete; start again");
+    if (!q.state || !q.code || q.state.length > 200 || q.code.length > 2_000)
+      throw new AppError("UNAUTHENTICATED", "the sign-in response is incomplete; start again");
     // One-time use: the state row is deleted whatever happens next.
     const st = tx(this.db, () => {
-      const row = one<{ binder_hash: string; code_verifier: string; nonce: string; expires_at: string }>(this.db, "SELECT * FROM oauth_states WHERE state = ?", q.state!);
+      const row = one<{ binder_hash: string; code_verifier: string; nonce: string; expires_at: string }>(
+        this.db,
+        "SELECT * FROM oauth_states WHERE state = ?",
+        q.state!,
+      );
       if (row) run(this.db, "DELETE FROM oauth_states WHERE state = ?", q.state!);
       return row;
     });
@@ -109,7 +117,10 @@ export class GoogleSignIn {
     });
     const body = (await res.json().catch(() => ({}))) as { id_token?: string; error?: string };
     if (!res.ok || !body.id_token) {
-      throw new AppError("UNAUTHENTICATED", body.error === "invalid_client" ? "Google rejected Jonathon's OAuth client id or secret" : "Google rejected the sign-in; start again");
+      throw new AppError(
+        "UNAUTHENTICATED",
+        body.error === "invalid_client" ? "Google rejected Jonathon's OAuth client id or secret" : "Google rejected the sign-in; start again",
+      );
     }
     const id = this.verifyIdToken(body.id_token, st.nonce);
     return this.bindOwner(id);
@@ -148,19 +159,35 @@ export class GoogleSignIn {
         run(this.db, "UPDATE users SET email = ? WHERE id = ?", id.email, bound.id);
         return { ...this.auth.startSession(bound, "google"), created: false };
       }
-      const owner = one<{ id: string; username: string; google_sub: string | null; email: string | null }>(this.db, "SELECT id, username, google_sub, email FROM users LIMIT 1");
+      const owner = one<{ id: string; username: string; google_sub: string | null; email: string | null }>(
+        this.db,
+        "SELECT id, username, google_sub, email FROM users LIMIT 1",
+      );
       if (!owner) {
         const userId = newId("usr");
         const username = id.email.slice(0, 64);
         // No password: "!" can never match a scrypt hash, so the password route stays closed for this account.
-        run(this.db, "INSERT INTO users (id, username, password_hash, created_at, google_sub, email) VALUES (?,?,?,?,?,?)", userId, username, "!", nowIso(), id.sub, id.email);
+        run(
+          this.db,
+          "INSERT INTO users (id, username, password_hash, created_at, google_sub, email) VALUES (?,?,?,?,?,?)",
+          userId,
+          username,
+          "!",
+          nowIso(),
+          id.sub,
+          id.email,
+        );
         audit(this.db, { principal: { kind: "user", userId, username }, action: "account.created", details: { via: "google" } });
         return { ...this.auth.startSession({ id: userId, username }, "google"), created: true };
       }
       // An install created with a password links to Google only for an explicitly allowed email.
       if (!owner.google_sub && g.allowedEmails.includes(id.email)) {
         run(this.db, "UPDATE users SET google_sub = ?, email = ? WHERE id = ?", id.sub, id.email, owner.id);
-        audit(this.db, { principal: { kind: "user", userId: owner.id, username: owner.username }, action: "account.linked_google", details: { email: id.email } });
+        audit(this.db, {
+          principal: { kind: "user", userId: owner.id, username: owner.username },
+          action: "account.linked_google",
+          details: { email: id.email },
+        });
         return { ...this.auth.startSession(owner, "google"), created: false };
       }
       throw new AppError("FORBIDDEN", "this Jonathon belongs to another Google account");

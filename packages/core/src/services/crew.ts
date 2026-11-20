@@ -32,7 +32,11 @@ const NUM = /\d+(?:[.,]\d+)*/g;
  */
 export function numbersSupported(text: string, evidence: string[]): boolean {
   // Evidence ids (E3, O2) and Jonathon's own ids (REQ-004) are references, not claims; client IDs (FR-01) are checked.
-  const nums = text.replace(/\b[EO]\d{1,3}\b/g, " ").replace(/\b(?:REQ|DEC|QUESTION|CONFLICT|CHANGE)-\d+\b/g, " ").match(NUM) ?? [];
+  const nums =
+    text
+      .replace(/\b[EO]\d{1,3}\b/g, " ")
+      .replace(/\b(?:REQ|DEC|QUESTION|CONFLICT|CHANGE)-\d+\b/g, " ")
+      .match(NUM) ?? [];
   if (!nums.length) return true;
   // "01" = "1" and "2,000" = "2000"; otherwise numbers must match exactly.
   const canon = (n: string) => n.replace(/,/g, "").replace(/^0+(?=\d)/, "");
@@ -75,7 +79,9 @@ export function renderCandidates(x: ModelExtraction): { text: string; lines: Can
   });
   x.conflicts.forEach((c, i) => {
     const id = `C${i + 1}`;
-    out.push(`${id} conflict ${q(c.title)} | side A ${q(c.side_a_claim)} cites ${c.side_a_evidence_ids.join(", ")} | side B ${q(c.side_b_claim)} cites ${c.side_b_evidence_ids.join(", ")}`);
+    out.push(
+      `${id} conflict ${q(c.title)} | side A ${q(c.side_a_claim)} cites ${c.side_a_evidence_ids.join(", ")} | side B ${q(c.side_b_claim)} cites ${c.side_b_evidence_ids.join(", ")}`,
+    );
     lines.push({ id, kind: "conflict", index: i, statements: new Map() });
   });
   x.requirement_updates.forEach((u, i) => {
@@ -111,7 +117,12 @@ export function applyVerdicts(x: ModelExtraction, lines: CandidateLine[], v: Mod
       return x.requirement_updates[line.index]!.change_summary;
     };
     if (!d || d.verdict === "unsupported") {
-      rejected.push({ kind: line.kind, text: label(), by: "verifier", reason: d ? d.reason || "not supported by the evidence" : "the verifier gave no verdict" });
+      rejected.push({
+        kind: line.kind,
+        text: label(),
+        by: "verifier",
+        reason: d ? d.reason || "not supported by the evidence" : "the verifier gave no verdict",
+      });
       continue;
     }
     const drop = new Set(d.verdict === "partly_supported" ? d.unsupported_statement_ids.map((s) => s.trim().toUpperCase()) : []);
@@ -119,7 +130,8 @@ export function applyVerdicts(x: ModelExtraction, lines: CandidateLine[], v: Mod
       const st = line.statements.get(sid);
       if (st) rejected.push({ kind: "statement", text: st.text, by: "verifier", reason: d.reason || "not stated by the evidence" });
     }
-    const keepText = (sec: string) => (text: string) => ![...drop].some((sid) => line.statements.get(sid)?.section === sec && line.statements.get(sid)?.text === text);
+    const keepText = (sec: string) => (text: string) =>
+      ![...drop].some((sid) => line.statements.get(sid)?.section === sec && line.statements.get(sid)?.text === text);
     if (line.kind === "requirement") {
       const r = structuredClone(x.requirements[line.index]!);
       for (const sec of REQ_SECTIONS) r[sec] = r[sec].filter(keepText(sec));
@@ -177,7 +189,8 @@ export function codeGate(x: ModelExtraction, evidenceFor: (ids: string[]) => str
     return false;
   });
   const conflicts = x.conflicts.filter((c) => {
-    if (numbersSupported(c.side_a_claim, evidenceFor(c.side_a_evidence_ids)) && numbersSupported(c.side_b_claim, evidenceFor(c.side_b_evidence_ids))) return true;
+    if (numbersSupported(c.side_a_claim, evidenceFor(c.side_a_evidence_ids)) && numbersSupported(c.side_b_claim, evidenceFor(c.side_b_evidence_ids)))
+      return true;
     rejected.push({ kind: "conflict", text: c.title, by: "code", reason: "a side claims a number that its cited evidence does not contain" });
     return false;
   });
@@ -241,7 +254,10 @@ export function removeClaims(md: string, claims: Claim[]): string {
   const lines = md.split("\n");
   const touched = new Set<number>();
   for (const c of claims) {
-    lines[c.line] = (lines[c.line] ?? "").replace(c.text, "").replace(/[ \t]{2,}/g, " ").replace(/\s+$/, "");
+    lines[c.line] = (lines[c.line] ?? "")
+      .replace(c.text, "")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\s+$/, "");
     touched.add(c.line);
   }
   return lines

@@ -1,16 +1,4 @@
-export type DocKind =
-  | "text"
-  | "markdown"
-  | "pdf"
-  | "docx"
-  | "pptx"
-  | "csv"
-  | "xlsx"
-  | "json"
-  | "html"
-  | "eml"
-  | "image"
-  | "unsupported";
+export type DocKind = "text" | "markdown" | "pdf" | "docx" | "pptx" | "csv" | "xlsx" | "json" | "html" | "eml" | "image" | "unsupported";
 
 export interface Detected {
   kind: DocKind;
@@ -43,7 +31,26 @@ const MEDIA: Record<string, string> = {
 };
 
 /** Formats that may carry macros or active content. Preserved, never parsed. */
-const ACTIVE_CONTENT = new Set(["docm", "xlsm", "xlsb", "pptm", "dotm", "xltm", "exe", "dll", "js", "vbs", "ps1", "bat", "cmd", "sh", "jar", "msi", "scr", "hta"]);
+const ACTIVE_CONTENT = new Set([
+  "docm",
+  "xlsm",
+  "xlsb",
+  "pptm",
+  "dotm",
+  "xltm",
+  "exe",
+  "dll",
+  "js",
+  "vbs",
+  "ps1",
+  "bat",
+  "cmd",
+  "sh",
+  "jar",
+  "msi",
+  "scr",
+  "hta",
+]);
 
 function startsWith(b: Uint8Array, sig: number[]): boolean {
   return sig.every((v, i) => b[i] === v);
@@ -74,10 +81,13 @@ function looksLikeText(b: Uint8Array): boolean {
 export function detectType(bytes: Uint8Array, extension: string): Detected {
   const ext = extension.toLowerCase();
   const media = MEDIA[ext] ?? "application/octet-stream";
-  if (ACTIVE_CONTENT.has(ext)) return { kind: "unsupported", mediaType: media, reason: `.${ext} files can contain macros or executable content; preserved but not parsed` };
+  if (ACTIVE_CONTENT.has(ext))
+    return { kind: "unsupported", mediaType: media, reason: `.${ext} files can contain macros or executable content; preserved but not parsed` };
   const isZip = startsWith(bytes, [0x50, 0x4b, 0x03, 0x04]);
   if (startsWith(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d])) {
-    return ext === "pdf" ? { kind: "pdf", mediaType: media, reason: null } : { kind: "unsupported", mediaType: "application/pdf", reason: "PDF content with a non-.pdf extension" };
+    return ext === "pdf"
+      ? { kind: "pdf", mediaType: media, reason: null }
+      : { kind: "unsupported", mediaType: "application/pdf", reason: "PDF content with a non-.pdf extension" };
   }
   if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47]) || startsWith(bytes, [0xff, 0xd8, 0xff]) || startsWith(bytes, [0x47, 0x49, 0x46, 0x38])) {
     return { kind: "image", mediaType: media, reason: "image content requires OCR" };

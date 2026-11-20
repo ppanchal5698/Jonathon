@@ -60,8 +60,12 @@ export default function LoginPage() {
   return (
     <AuthLayout title="Sign in" subtitle="Enter the local account's username and password.">
       <form onSubmit={submit} className="space-y-5">
-        <Field label="Username">{(id) => <Input id={id} value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required autoFocus />}</Field>
-        <Field label="Password">{(id) => <Input id={id} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />}</Field>
+        <Field label="Username">
+          {(id) => <Input id={id} value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required autoFocus />}
+        </Field>
+        <Field label="Password">
+          {(id) => <Input id={id} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />}
+        </Field>
         <ErrorBanner error={error} />
         <Button type="submit" disabled={busy} className="w-full">
           {busy ? "Signing in…" : "Sign in"}

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { type Dirent, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { createReadStream, type Dirent, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { audit } from "../audit";
 import { all, one } from "../db";
@@ -48,7 +48,16 @@ export function folderDisplayName(rel: string): string {
   return name.length > 240 ? `…${name.slice(-239)}` : name;
 }
 
-const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
+/** Stream a file through SHA-256 without blocking the event loop or holding the whole file in memory. */
+function sha256File(path: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const h = createHash("sha256");
+    createReadStream(path)
+      .on("data", (chunk) => h.update(chunk))
+      .on("error", reject)
+      .on("end", () => resolvePromise(h.digest("hex")));
+  });
+}
 
 /**
  * Import every supported document under a folder on this computer. Only the signed-in person can do it (MCP tokens and
@@ -98,18 +107,19 @@ export class FolderImportService {
     return real;
   }
 
-  scan(principal: Principal, projectId: string, body: { path: string; recursive: boolean }): FolderScan {
+  /** Validation errors throw synchronously; the scan itself (hashing) is asynchronous. */
+  scan(principal: Principal, projectId: string, body: { path: string; recursive: boolean }): Promise<FolderScan> {
     assertHuman(principal);
     requireProject(this.ctx, principal, projectId, "write");
     return this.scanRoot(projectId, this.resolveRoot(body.path), body.recursive);
   }
 
   /** Queue the import as a background job (a large folder takes longer than one HTTP request should). */
-  queueImport(principal: Principal, projectId: string, body: { path: string; recursive: boolean; files: string[] }) {
+  async queueImport(principal: Principal, projectId: string, body: { path: string; recursive: boolean; files: string[] }) {
     assertHuman(principal);
     requireProject(this.ctx, principal, projectId, "write");
     const root = this.resolveRoot(body.path);
-    const scan = this.scanRoot(projectId, root, body.recursive);
+    const scan = await this.scanRoot(projectId, root, body.recursive);
     const importable = new Set(scan.files.filter((f) => f.status === "new" || f.status === "changed").map((f) => f.path));
     const chosen = [...new Set(body.files)].filter((f) => importable.has(f));
     if (!chosen.length) throw new AppError("VALIDATION_FAILED", "none of the selected files are new or changed");
@@ -129,7 +139,7 @@ export class FolderImportService {
     const principal: Principal = { kind: "user", userId: p.user.userId, username: p.user.username };
     // Re-check everything at run time: the folder or its files may have changed since the scan.
     const root = this.resolveRoot(p.root);
-    const scan = this.scanRoot(projectId, root, p.recursive);
+    const scan = await this.scanRoot(projectId, root, p.recursive);
     const byPath = new Map(scan.files.map((f) => [f.path, f]));
     const created: string[] = [];
     const revised: string[] = [];
@@ -196,7 +206,8 @@ export class FolderImportService {
     return abs;
   }
 
-  private scanRoot(projectId: string, root: string, recursive: boolean): FolderScan {
+  /** Async: hashing a large folder must not block the API (other requests keep being served while it runs). */
+  private async scanRoot(projectId: string, root: string, recursive: boolean): Promise<FolderScan> {
     const files: FolderFile[] = [];
     const skip = (path: string, size: number, reason: string) => files.push({ path, size, status: "skipped", reason });
     const own = [resolve(this.ctx.config.dataDir), resolve(this.ctx.config.repoRoot)];
@@ -276,7 +287,7 @@ export class FolderImportService {
       if (f.status === "skipped") continue;
       let hash: string;
       try {
-        hash = sha256(readFileSync(this.safeJoin(root, f.path)));
+        hash = await sha256File(this.safeJoin(root, f.path));
       } catch {
         f.status = "skipped";
         f.reason = "file cannot be read";

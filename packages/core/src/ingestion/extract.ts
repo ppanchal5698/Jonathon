@@ -19,15 +19,19 @@ function decodeText(bytes: Uint8Array): string {
 }
 
 function toMarkdown(chunks: Chunk[]): string {
-  return chunks
-    .map((c) => `<!-- chunk ${c.ordinal} ${JSON.stringify(c.locator)} -->\n${c.heading ? `### ${c.heading}\n\n` : ""}${c.text}`)
-    .join("\n\n");
+  return chunks.map((c) => `<!-- chunk ${c.ordinal} ${JSON.stringify(c.locator)} -->\n${c.heading ? `### ${c.heading}\n\n` : ""}${c.text}`).join("\n\n");
 }
 
 function done(extractor: string, blocks: Block[], warnings: string[], partial = false): ExtractionOutcome {
   const chunks = packBlocks(blocks);
   if (chunks.length === 0) return { status: "failed", extractor, warnings: [...warnings, "no text could be extracted"], chunks: [], markdown: "" };
-  return { status: partial || warnings.some((w) => w.startsWith("partial:")) ? "partially_succeeded" : "succeeded", extractor, warnings, chunks, markdown: toMarkdown(chunks) };
+  return {
+    status: partial || warnings.some((w) => w.startsWith("partial:")) ? "partially_succeeded" : "succeeded",
+    extractor,
+    warnings,
+    chunks,
+    markdown: toMarkdown(chunks),
+  };
 }
 
 /** Reject zip bombs before handing an Office file to a parser. */
@@ -60,7 +64,13 @@ async function extractPdf(bytes: Uint8Array): Promise<ExtractionOutcome> {
   });
   const totalChars = text.join("").trim().length;
   if (totalChars < 20 * Math.max(1, totalPages)) {
-    return { status: "needs_ocr", extractor: "unpdf", warnings: [`${totalPages} page(s) with little or no text layer; OCR is not configured`], chunks: [], markdown: "" };
+    return {
+      status: "needs_ocr",
+      extractor: "unpdf",
+      warnings: [`${totalPages} page(s) with little or no text layer; OCR is not configured`],
+      chunks: [],
+      markdown: "",
+    };
   }
   const warnings = emptyPages > 0 ? [`partial: ${emptyPages} of ${totalPages} page(s) had no text layer (possibly scanned)`] : [];
   return done("unpdf", blocks, warnings);
@@ -86,7 +96,12 @@ async function htmlBlocks(html: string, warnings: string[]): Promise<Block[]> {
     const heading = path.filter(Boolean).join(" > ") || null;
     if (tag === "table") {
       table++;
-      const rows = el.querySelectorAll("tr").map((tr) => tr.querySelectorAll("th,td").map((c) => c.text.trim().replace(/\s+/g, " ")).join(" | "));
+      const rows = el.querySelectorAll("tr").map((tr) =>
+        tr
+          .querySelectorAll("th,td")
+          .map((c) => c.text.trim().replace(/\s+/g, " "))
+          .join(" | "),
+      );
       if (rows.length) blocks.push({ heading, locator: { table }, text: rows.join("\n") });
       continue;
     }
@@ -111,11 +126,11 @@ async function extractDocx(bytes: Uint8Array): Promise<ExtractionOutcome> {
   await checkZip(bytes);
   const mammoth = (await import("mammoth")).default;
   // Images are dropped; mammoth does not run macros or fetch external resources.
-  const res = await mammoth.convertToHtml(
-    { buffer: Buffer.from(bytes) },
-    { convertImage: mammoth.images.imgElement(async () => ({ src: "" })) },
-  );
-  const warnings = res.messages.filter((m) => m.type === "warning").slice(0, 10).map((m) => `docx: ${m.message.slice(0, 200)}`);
+  const res = await mammoth.convertToHtml({ buffer: Buffer.from(bytes) }, { convertImage: mammoth.images.imgElement(async () => ({ src: "" })) });
+  const warnings = res.messages
+    .filter((m) => m.type === "warning")
+    .slice(0, 10)
+    .map((m) => `docx: ${m.message.slice(0, 200)}`);
   return done("mammoth", await htmlBlocks(res.value, warnings), warnings);
 }
 
@@ -130,12 +145,19 @@ async function extractPptx(bytes: Uint8Array): Promise<ExtractionOutcome> {
   const blocks: Block[] = [];
   for (const m of slides) {
     const xml = await zip.file(m[0])!.async("string");
-    const paras = xml.split(/<\/a:p>/).map((p) => [...p.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((t) => t[1]).join("")).map(decodeEntities).filter((t) => t.trim());
+    const paras = xml
+      .split(/<\/a:p>/)
+      .map((p) => [...p.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((t) => t[1]).join(""))
+      .map(decodeEntities)
+      .filter((t) => t.trim());
     if (paras.length) blocks.push({ heading: `Slide ${m[1]}`, locator: { slide: Number(m[1]) }, text: paras.join("\n") });
     const notesName = `ppt/notesSlides/notesSlide${m[1]}.xml`;
     if (zip.file(notesName)) {
       const nx = await zip.file(notesName)!.async("string");
-      const notes = [...nx.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((t) => decodeEntities(t[1]!)).join(" ").trim();
+      const notes = [...nx.matchAll(/<a:t>([^<]*)<\/a:t>/g)]
+        .map((t) => decodeEntities(t[1]!))
+        .join(" ")
+        .trim();
       if (notes && !/^\d+$/.test(notes)) blocks.push({ heading: `Slide ${m[1]} notes`, locator: { slide: Number(m[1]), notes: "speaker" }, text: notes });
     }
   }
@@ -143,7 +165,12 @@ async function extractPptx(bytes: Uint8Array): Promise<ExtractionOutcome> {
 }
 
 function decodeEntities(s: string): string {
-  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 function colName(n: number): string {
@@ -194,7 +221,13 @@ function rowsToBlocks(sheet: string | null, rows: SheetRow[], warnings: string[]
   for (let i = 0; i < body.length; i += ROWS_PER_CHUNK) {
     const slice = body.slice(i, i + ROWS_PER_CHUNK);
     const text = slice
-      .map((r) => `Row ${r.n}: ${r.vals.map((v, c) => (v?.trim() ? `${header[c] ?? colName(c + 1)} = ${v.trim()}` : "")).filter(Boolean).join("; ")}`)
+      .map(
+        (r) =>
+          `Row ${r.n}: ${r.vals
+            .map((v, c) => (v?.trim() ? `${header[c] ?? colName(c + 1)} = ${v.trim()}` : ""))
+            .filter(Boolean)
+            .join("; ")}`,
+      )
       .join("\n");
     blocks.push({ heading, locator: loc(slice[0]!.n, slice[slice.length - 1]!.n), text });
   }
@@ -211,7 +244,15 @@ async function extractCsv(bytes: Uint8Array): Promise<ExtractionOutcome> {
   if (res.data.some((r) => r.some((v) => /^[=+@-]/.test(v ?? "") && /^[=+@]/.test(v ?? "")))) {
     warnings.push("formula-like cell values were kept as plain text and not evaluated");
   }
-  return done("papaparse", rowsToBlocks(null, res.data.map((vals, i) => ({ n: i + 1, vals: vals.map((v) => v ?? "") })), warnings), warnings);
+  return done(
+    "papaparse",
+    rowsToBlocks(
+      null,
+      res.data.map((vals, i) => ({ n: i + 1, vals: vals.map((v) => v ?? "") })),
+      warnings,
+    ),
+    warnings,
+  );
 }
 
 /** Floating-point noise from cached formula results (13.719999999999999) is rounded to 6 decimals (13.72). */
@@ -241,7 +282,12 @@ async function extractXlsx(bytes: Uint8Array): Promise<ExtractionOutcome> {
         else if (typeof v === "object" && v !== null && "formula" in (v as object)) {
           formulas++;
           const r = (v as { result?: unknown }).result;
-          s = r == null ? "" : typeof r === "number" ? num(r) : String(typeof r === "object" && r && "error" in (r as object) ? (r as { error: string }).error : r);
+          s =
+            r == null
+              ? ""
+              : typeof r === "number"
+                ? num(r)
+                : String(typeof r === "object" && r && "error" in (r as object) ? (r as { error: string }).error : r);
         } else if (typeof v === "object" && v !== null && "richText" in (v as object)) {
           s = ((v as { richText: { text: string }[] }).richText ?? []).map((t) => t.text).join("");
         } else if (typeof v === "object" && v !== null && "text" in (v as object)) {

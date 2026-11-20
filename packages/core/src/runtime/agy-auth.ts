@@ -32,9 +32,14 @@ export function extractGoogleAuthUrl(text: string): string | null {
   }
 }
 
+// Terminal escape sequences (CSI and OSC), which is exactly what stripAnsi removes.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the purpose
+const CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the purpose
+const OSC = /\x1b\][^\x07]*\x07/g;
+
 export function stripAnsi(s: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escape sequences are exactly what is being removed
-  return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "").replace(/\r/g, "");
+  return s.replace(CSI, "").replace(OSC, "").replace(/\r/g, "");
 }
 
 /** Authorization codes from Google's OAuth flow: printable, no whitespace. */
@@ -143,16 +148,32 @@ export function runAgySignIn(o: SignInOptions): Promise<SignInOutcome> {
       if (/"event"\s*:\s*"init"/.test(text) || (codeSent && /authenticat(ion|ed) (succeeded|successful)|successfully (logged|signed) in/i.test(text))) {
         return finish({ ok: true });
       }
-      if (/invalid_grant/.test(text)) return finish({ ok: false, code: "REJECTED", message: "Google rejected the code (it expired, was already used, or was copied incompletely). Start again." });
-      if (/Run '?antigravity'? to log in/i.test(text)) return finish({ ok: false, code: "NO_URL", message: "agy did not offer an interactive sign-in (no terminal)" });
+      if (/invalid_grant/.test(text))
+        return finish({
+          ok: false,
+          code: "REJECTED",
+          message: "Google rejected the code (it expired, was already used, or was copied incompletely). Start again.",
+        });
+      if (/Run '?antigravity'? to log in/i.test(text))
+        return finish({ ok: false, code: "NO_URL", message: "agy did not offer an interactive sign-in (no terminal)" });
       if (/authentication (failed|interrupted)|timed out/i.test(text)) {
-        return finish({ ok: false, code: urlSent && !codeSent ? "TIMEOUT" : "FAILED", message: urlSent && !codeSent ? "the code was not entered in time; start again" : "agy reported that authentication failed" });
+        return finish({
+          ok: false,
+          code: urlSent && !codeSent ? "TIMEOUT" : "FAILED",
+          message: urlSent && !codeSent ? "the code was not entered in time; start again" : "agy reported that authentication failed",
+        });
       }
     };
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
     child.on("error", (e) => finish({ ok: false, code: "FAILED", message: `could not start agy: ${e.message}` }));
-    child.on("close", () => finish(urlSent ? { ok: false, code: "FAILED", message: "agy exited before sign-in completed" } : { ok: false, code: "NO_URL", message: "agy exited without offering a sign-in link" }));
+    child.on("close", () =>
+      finish(
+        urlSent
+          ? { ok: false, code: "FAILED", message: "agy exited before sign-in completed" }
+          : { ok: false, code: "NO_URL", message: "agy exited without offering a sign-in link" },
+      ),
+    );
   });
 }
 

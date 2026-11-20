@@ -12,6 +12,7 @@
     "build": "pnpm typecheck && pnpm --filter @jonathon/web build",
     "lint": "biome lint .",
     "format": "biome format --write .",
+    "format:check": "biome format .",
     "typecheck": "pnpm -r --parallel typecheck",
     "test": "vitest run",
     "test:watch": "vitest",

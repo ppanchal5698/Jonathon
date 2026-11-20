@@ -326,7 +326,7 @@ export class SourceService {
     });
     if (outcome.status === "failed") throw new AppError("EXTRACTION_FAILED", outcome.warnings.join("; ") || "extraction failed");
 
-    // Step 12: queue AI interpretation only if Parth enabled AI processing for this project.
+    // Step 12: queue AI interpretation only if the owner enabled AI processing for this project.
     let interpretationJob: string | null = null;
     const project = one<{ ai_enabled: number }>(this.ctx.db, "SELECT ai_enabled FROM projects WHERE id = ?", rev.project_id);
     if (project?.ai_enabled === 1 && outcome.chunks.length > 0 && (outcome.status === "succeeded" || outcome.status === "partially_succeeded")) {

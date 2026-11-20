@@ -16,6 +16,17 @@ async function main() {
   // Local-only diagnostics at startup (version + flags). The provider auth check is NOT run automatically.
   const diag = await app.ops.runtimeDiagnostics(false);
   log.info({ runtime: diag.status, provider: diag.provider }, "runtime inspected");
+  const sweep = () => {
+    try {
+      const n = app.ops.sweepExpired();
+      if (Object.values(n).some((v) => v > 0)) log.info(n, "expired records removed");
+    } catch (e) {
+      log.warn({ err: (e as Error).message }, "expired-record sweep failed");
+    }
+  };
+  sweep();
+  const sweeper = setInterval(sweep, 3_600_000);
+  sweeper.unref();
   const worker = app.startWorker();
   log.info({ worker_id: worker.workerId, concurrency: config.workerConcurrency }, "worker started");
   // Docker worker with its own agy home: handle "Sign in with Google" / "Sign out" requests from the UI.

@@ -74,6 +74,8 @@ services:
       <<: *app-env
       # The API image has no agy: runtime status, authentication checks and Google sign-in run in the worker.
       JONATHON_RUNTIME_IN_WORKER: "true"
+      # REST stays on 4100 inside the network (the web proxy); MCP gets its own listener on 4101, the only one published.
+      JONATHON_MCP_PORT: "4101"
       # Sign in with Google for Jonathon itself. When the client id is set, it is the ONLY way to sign in.
       # Redirect URI to register in Google Cloud Console: http://localhost:<UI port>/api/v1/auth/google/callback
       JONATHON_GOOGLE_CLIENT_ID: ${JONATHON_GOOGLE_CLIENT_ID:-}
@@ -87,11 +89,10 @@ services:
         source: ${JONATHON_HOST_IMPORT_DIR:-./docker/empty-imports}
         target: /imports
         read_only: true
-    # MCP for Claude Code on the host: http://127.0.0.1:4100/mcp (bearer token). Loopback only. The same listener
-    # serves /api/v1, which still requires a session cookie + CSRF token + an allowed Origin. To disable host MCP
-    # access, set JONATHON_DOCKER_MCP_BIND=127.0.0.1 and JONATHON_DOCKER_MCP_PORT to an unused port, or remove this.
+    # MCP for Claude Code on the host: http://127.0.0.1:4100/mcp (bearer token), loopback only. This published port is
+    # the MCP-only listener: /api/v1 is not served on it (404). To disable host MCP access, remove this entry.
     ports:
-      - "${JONATHON_DOCKER_MCP_BIND:-127.0.0.1}:${JONATHON_DOCKER_MCP_PORT:-4100}:4100"
+      - "${JONATHON_DOCKER_MCP_BIND:-127.0.0.1}:${JONATHON_DOCKER_MCP_PORT:-4100}:4101"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/api/v1/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 10s
@@ -112,6 +113,8 @@ services:
       <<: *app-env
       JONATHON_HEALTH_FILE: /tmp/worker-health
       AGY_PATH: /usr/local/bin/agy
+      # agy's policy files and empty working folders: on the container's tmpfs, outside the client-data volume.
+      JONATHON_RUNTIME_DIR: /tmp/jonathon-runtime
     volumes:
       - *data-volume
       # agy's home: its Google sign-in (token files) lives here, never in the image or the client-data volume.

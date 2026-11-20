@@ -106,7 +106,11 @@ export class RuntimeAuthService {
     }
     this.expireStale();
     return tx(this.ctx.db, () => {
-      const active = one<Row>(this.ctx.db, `SELECT * FROM runtime_auth_requests WHERE status IN (${ACTIVE.map(() => "?").join(",")}) ORDER BY created_at DESC LIMIT 1`, ...ACTIVE);
+      const active = one<Row>(
+        this.ctx.db,
+        `SELECT * FROM runtime_auth_requests WHERE status IN (${ACTIVE.map(() => "?").join(",")}) ORDER BY created_at DESC LIMIT 1`,
+        ...ACTIVE,
+      );
       if (active) return view(active);
       const id = newId("rta");
       const now = nowIso();
@@ -120,7 +124,14 @@ export class RuntimeAuthService {
         now,
         now,
       );
-      if (action !== "check") audit(this.ctx.db, { principal, action: `runtime.${action}_requested`, entityType: "runtime_auth", entityId: id, correlationId: correlationId ?? null });
+      if (action !== "check")
+        audit(this.ctx.db, {
+          principal,
+          action: `runtime.${action}_requested`,
+          entityType: "runtime_auth",
+          entityId: id,
+          correlationId: correlationId ?? null,
+        });
       return view(one<Row>(this.ctx.db, "SELECT * FROM runtime_auth_requests WHERE id = ?", id)!);
     });
   }
@@ -141,7 +152,8 @@ export class RuntimeAuthService {
     return tx(this.ctx.db, () => {
       const r = one<Row>(this.ctx.db, "SELECT * FROM runtime_auth_requests WHERE id = ?", id);
       if (!r) throw new AppError("NOT_FOUND", "sign-in request not found");
-      if (r.action !== "sign_in" || r.status !== "awaiting_code" || r.code) throw new AppError("INVALID_TRANSITION", "this sign-in is not waiting for a code; start again");
+      if (r.action !== "sign_in" || r.status !== "awaiting_code" || r.code)
+        throw new AppError("INVALID_TRANSITION", "this sign-in is not waiting for a code; start again");
       if (r.expires_at && r.expires_at <= nowIso()) throw new AppError("INVALID_TRANSITION", "the sign-in link expired; start again");
       run(this.ctx.db, "UPDATE runtime_auth_requests SET code = ?, status = 'verifying', updated_at = ? WHERE id = ?", c, nowIso(), id);
       return view(one<Row>(this.ctx.db, "SELECT * FROM runtime_auth_requests WHERE id = ?", id)!);
@@ -174,7 +186,16 @@ export class RuntimeAuthService {
       }
     }
     const s = this.status(principal);
-    if (!s.runtime) return { status: "unchecked", provider: "antigravity-cli", installation: { installed: false, executable: "agy (worker)", version: null, error: "the worker has not reported yet" }, capabilities: null, auth: null, auth_checked: false, location: "worker" };
+    if (!s.runtime)
+      return {
+        status: "unchecked",
+        provider: "antigravity-cli",
+        installation: { installed: false, executable: "agy (worker)", version: null, error: "the worker has not reported yet" },
+        capabilities: null,
+        auth: null,
+        auth_checked: false,
+        location: "worker",
+      };
     return { ...s.runtime, location: "worker" };
   }
 
@@ -189,7 +210,11 @@ export class RuntimeAuthService {
         run(
           this.ctx.db,
           "UPDATE runtime_auth_requests SET status = 'expired', code = NULL, detail = ?, updated_at = ? WHERE id = ? AND status = ?",
-          pickupLate ? "the worker did not pick this up; is it running?" : codeLate ? "the sign-in link expired before a code was entered; start again" : "no progress for 5 minutes",
+          pickupLate
+            ? "the worker did not pick this up; is it running?"
+            : codeLate
+              ? "the sign-in link expired before a code was entered; start again"
+              : "no progress for 5 minutes",
           nowIso(),
           r.id,
           r.status,
@@ -313,7 +338,8 @@ export class RuntimeAuthAgent {
             return {};
           });
           if ("code" in got && got.code) return got.code;
-          if ("stop" in got && got.stop) throw new Error(got.stop === "cancelled" ? "sign-in cancelled" : "the sign-in link expired before a code was entered; start again");
+          if ("stop" in got && got.stop)
+            throw new Error(got.stop === "cancelled" ? "sign-in cancelled" : "the sign-in link expired before a code was entered; start again");
           await sleep(300);
         }
       },
@@ -353,7 +379,13 @@ export class RuntimeAuthAgent {
     }
     const confirmed = auth.status === "auth_required";
     this.finish(r.id, "succeeded", confirmed ? "signed out" : "stored credentials removed; agy could not confirm the state");
-    audit(this.ctx.db, { principal, action: "runtime.signed_out", entityType: "runtime_auth", entityId: r.id, details: { removed: removed.length, confirmed } });
+    audit(this.ctx.db, {
+      principal,
+      action: "runtime.signed_out",
+      entityType: "runtime_auth",
+      entityId: r.id,
+      details: { removed: removed.length, confirmed },
+    });
     this.log.info({ request: r.id, removed: removed.length, confirmed }, "agy signed out");
   }
 }

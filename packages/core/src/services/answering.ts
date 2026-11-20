@@ -158,7 +158,11 @@ export class AnswerService {
     if (principal.kind === "system") throw new AppError("FORBIDDEN", "system principals cannot ask questions");
     const idem = body.request_id ? `ask:${actor.kind}:${actor.id}:${body.request_id}` : null;
     if (idem) {
-      const prior = one<{ id: string; project_id: string; payload: string }>(this.ctx.db, "SELECT id, project_id, payload FROM jobs WHERE idempotency_key = ?", idem);
+      const prior = one<{ id: string; project_id: string; payload: string }>(
+        this.ctx.db,
+        "SELECT id, project_id, payload FROM jobs WHERE idempotency_key = ?",
+        idem,
+      );
       if (prior) {
         if (prior.project_id !== projectId) throw new AppError("VALIDATION_FAILED", "request_id was already used in another project");
         return this.waitForAnswer(principal, projectId, prior.id, opts.waitMs ?? 0);
@@ -197,6 +201,18 @@ export class AnswerService {
         kr,
         now,
       );
+      if (principal.kind === "mcp_token") {
+        // Each MCP question sends client text to the model provider: bound what one token can have in flight.
+        const active = one<{ n: number }>(
+          this.ctx.db,
+          `SELECT COUNT(*) AS n FROM jobs j JOIN conversations c ON c.id = json_extract(j.payload, '$.conversation_id')
+           WHERE j.type = 'answer' AND j.status IN ('queued','running','retrying') AND c.owner_kind = 'mcp_token' AND c.owner_id = ?`,
+          principal.tokenId,
+        )!.n;
+        if (active >= this.ctx.config.mcpLimits.maxActiveAsks) {
+          throw new AppError("RATE_LIMITED", `this token already has ${active} questions in progress; poll them with get_job before asking more`);
+        }
+      }
       const j = this.ctx.queue.enqueue({
         projectId,
         type: "answer",
@@ -213,7 +229,14 @@ export class AnswerService {
         correlationId: opts.correlationId ?? null,
       });
       run(this.ctx.db, "UPDATE messages SET job_id = ? WHERE id = ?", j.id, userMsgId);
-      audit(this.ctx.db, { principal, projectId, action: "conversation.asked", entityType: "conversation", entityId: conversationId, details: { job_id: j.id } });
+      audit(this.ctx.db, {
+        principal,
+        projectId,
+        action: "conversation.asked",
+        entityType: "conversation",
+        entityId: conversationId,
+        details: { job_id: j.id },
+      });
       return j;
     });
     return this.waitForAnswer(principal, projectId, job.id, opts.waitMs ?? this.ctx.config.askWaitMs);
@@ -262,7 +285,13 @@ export class AnswerService {
     const p = jc.job.payload as { conversation_id: string; user_message_id: string; feature_scope: string | null; client_knowledge_revision: number | null };
     const projectId = jc.job.projectId;
     const conv = one<ConvRow>(this.ctx.db, "SELECT * FROM conversations WHERE id = ? AND project_id = ?", p.conversation_id, projectId);
-    const userMsg = one<MsgRow>(this.ctx.db, "SELECT * FROM messages WHERE id = ? AND conversation_id = ? AND project_id = ?", p.user_message_id, p.conversation_id, projectId);
+    const userMsg = one<MsgRow>(
+      this.ctx.db,
+      "SELECT * FROM messages WHERE id = ? AND conversation_id = ? AND project_id = ?",
+      p.user_message_id,
+      p.conversation_id,
+      projectId,
+    );
     const project = one<{ name: string; ai_enabled: number }>(this.ctx.db, "SELECT name, ai_enabled FROM projects WHERE id = ?", projectId);
     if (!conv || !userMsg || !project) throw new AppError("CONVERSATION_NOT_FOUND", "conversation or message no longer exists");
     const existing = one<MsgRow>(this.ctx.db, "SELECT * FROM messages WHERE reply_to = ? AND role = 'assistant'", userMsg.id);
@@ -285,7 +314,8 @@ export class AnswerService {
     const previousQuestion = priorTurns.at(-1)?.q ?? "";
     const items = this.buildContext(projectId, `${question} ${scope ?? ""}`, scope, previousQuestion, this.previousEvidence(conv.id, userMsg.id));
     const priorKr = priorTurns.at(-1)?.kr ?? null;
-    if (priorKr != null && priorKr !== kr) warnings.push(`Knowledge changed during this conversation (revision ${priorKr} → ${kr}); earlier answers may be stale.`);
+    if (priorKr != null && priorKr !== kr)
+      warnings.push(`Knowledge changed during this conversation (revision ${priorKr} → ${kr}); earlier answers may be stale.`);
 
     let turn: ModelTurn;
     let rt: NormalizedRuntimeResult | null = null;
@@ -319,7 +349,8 @@ export class AnswerService {
         rt = res.rt;
         resumeId = rt.conversationId ?? resumeId;
         turn = res.turn;
-        if (rt.contextRebuilt) warnings.push("Runtime context was rebuilt: the earlier runtime conversation could not be resumed, so Jonathon re-sent the conversation history.");
+        if (rt.contextRebuilt)
+          warnings.push("Runtime context was rebuilt: the earlier runtime conversation could not be resumed, so Jonathon re-sent the conversation history.");
         warnings.push(...rt.warnings.filter((w) => !w.startsWith("runtime_context_rebuilt")));
         if (turn.action !== "request_more_evidence" || iterations >= this.ctx.config.runtime.retrievalIterations) {
           if (turn.action === "request_more_evidence") warnings.push("The model asked for more evidence after the retrieval limit was reached.");
@@ -391,7 +422,10 @@ export class AnswerService {
       void used;
       run(this.ctx.db, "UPDATE conversations SET updated_at = ? WHERE id = ?", nowIso(), conv.id);
     });
-    return { status: answer.status === "answered" || answer.status === "partially_answered" ? "succeeded" : "partially_succeeded", result: { message_id: msgId, status: answer.status } };
+    return {
+      status: answer.status === "answered" || answer.status === "partially_answered" ? "succeeded" : "partially_succeeded",
+      result: { message_id: msgId, status: answer.status },
+    };
   }
 
   /**
@@ -426,7 +460,13 @@ export class AnswerService {
     };
     let rt: NormalizedRuntimeResult;
     try {
-      rt = await this.ctx.runtime.run({ projectId, prompt, schema: "verify_answer", signal: jc.signal, onProgress: (s) => jc.progress(`answer verifier: ${s}`) });
+      rt = await this.ctx.runtime.run({
+        projectId,
+        prompt,
+        schema: "verify_answer",
+        signal: jc.signal,
+        onProgress: (s) => jc.progress(`answer verifier: ${s}`),
+      });
     } catch (e) {
       if ((e as AppError).code === "JOB_CANCELLED") throw e;
       return unverified((e as Error).message);
@@ -458,23 +498,41 @@ export class AnswerService {
   }
 
   private async invoke(prompt: string, projectId: string, resumeId: string | null, jc: JobContext): Promise<{ rt: NormalizedRuntimeResult; turn: ModelTurn }> {
-    let rt = await this.ctx.runtime.run({ projectId, prompt, schema: "answer", resumeConversationId: resumeId, signal: jc.signal, onProgress: (s) => jc.progress(s) });
+    let rt = await this.ctx.runtime.run({
+      projectId,
+      prompt,
+      schema: "answer",
+      resumeConversationId: resumeId,
+      signal: jc.signal,
+      onProgress: (s) => jc.progress(s),
+    });
     for (let attempt = 0; ; attempt++) {
       if (rt.completion === "permission_denied") {
-        throw new AppError("ANTIGRAVITY_PERMISSION_DENIED", `the runtime attempted denied actions (${rt.permissionDenials.join(", ")}); no answer was accepted`);
+        throw new AppError(
+          "ANTIGRAVITY_PERMISSION_DENIED",
+          `the runtime attempted denied actions (${rt.permissionDenials.join(", ")}); no answer was accepted`,
+        );
       }
       if (rt.completion === "cancelled") throw new AppError("JOB_CANCELLED", "runtime run was cancelled");
       if (rt.completion === "timeout") throw new AppError("ANTIGRAVITY_TIMEOUT", "runtime timed out", { retryable: true });
-      if (rt.completion !== "success") throw new AppError("ANTIGRAVITY_UNAVAILABLE", `runtime returned ${rt.envelopeStatus ?? "an error"}`, { retryable: true });
+      if (rt.completion !== "success")
+        throw new AppError("ANTIGRAVITY_UNAVAILABLE", `runtime returned ${rt.envelopeStatus ?? "an error"}`, { retryable: true });
       const parsed = ModelTurnSchema.safeParse(rt.structured);
       if (parsed.success) return { rt, turn: parsed.data };
       if (attempt >= this.ctx.config.runtime.repairAttempts) {
-        throw new AppError("INVALID_MODEL_OUTPUT", rt.structured == null ? "the model returned no structured output" : "the model output did not match the answer schema", {
-          details: { issues: parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".")}: ${i.message}`) },
-        });
+        throw new AppError(
+          "INVALID_MODEL_OUTPUT",
+          rt.structured == null ? "the model returned no structured output" : "the model output did not match the answer schema",
+          {
+            details: { issues: parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".")}: ${i.message}`) },
+          },
+        );
       }
       jc.progress("repairing model output");
-      const issues = parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+      const issues = parsed.error.issues
+        .slice(0, 5)
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
       rt = await this.ctx.runtime.run({
         projectId,
         prompt: `<instructions>\nYour previous output did not match the required JSON schema (${fence(issues)}). Return the complete answer again as valid structured output. Use only the evidence already provided.\n</instructions>`,
@@ -505,13 +563,20 @@ export class AnswerService {
     for (const h of hits) chosen.set(h.chunk_id, h);
     // Original client text is the ground truth. Drafts derived from it (often many per document) must not crowd it
     // out of the context, so the best source passages are always added as well.
-    for (const h of searchProject(this.ctx.db, projectId, query, { types: ["source"], limit: Math.ceil(max / 2), exclude: new Set(chosen.keys()) })) chosen.set(h.chunk_id, h);
+    for (const h of searchProject(this.ctx.db, projectId, query, { types: ["source"], limit: Math.ceil(max / 2), exclude: new Set(chosen.keys()) }))
+      chosen.set(h.chunk_id, h);
     if (previousQuestion) {
-      for (const h of searchProject(this.ctx.db, projectId, previousQuestion, { limit: Math.ceil(max / 2), exclude: new Set(chosen.keys()) })) chosen.set(h.chunk_id, h);
+      for (const h of searchProject(this.ctx.db, projectId, previousQuestion, { limit: Math.ceil(max / 2), exclude: new Set(chosen.keys()) }))
+        chosen.set(h.chunk_id, h);
     }
     if (previousChunks.length) {
       // Refresh: re-read by id within this project; deleted or replaced evidence simply drops out.
-      for (const h of hitsById(this.ctx.db, projectId, previousChunks.filter((id) => !chosen.has(id)))) chosen.set(h.chunk_id, h);
+      for (const h of hitsById(
+        this.ctx.db,
+        projectId,
+        previousChunks.filter((id) => !chosen.has(id)),
+      ))
+        chosen.set(h.chunk_id, h);
     }
     // Always include approved knowledge and open blocking items in the feature scope.
     if (scope) {
@@ -589,7 +654,15 @@ export class AnswerService {
     return turns.slice(-n);
   }
 
-  private buildPrompt(projectName: string, kr: number, scope: string | null, history: { q: string; a: string }[], items: ContextItem[], question: string, notes: string[]): string {
+  private buildPrompt(
+    projectName: string,
+    kr: number,
+    scope: string | null,
+    history: { q: string; a: string }[],
+    items: ContextItem[],
+    question: string,
+    notes: string[],
+  ): string {
     const hist = history.length
       ? `<history>\n${history.map((t, i) => `<turn n="${i + 1}">\nUser: ${fence(t.q)}\nJonathon: ${fence(t.a || "(no answer)")}\n</turn>`).join("\n")}\n</history>\nEarlier answers are context only, not evidence. Re-check every claim against the evidence below.`
       : "";
@@ -627,7 +700,9 @@ export class AnswerService {
     if (!rt?.conversationId) return;
     const version = rt.runtimeVersion ?? "unknown";
     tx(this.ctx.db, () => {
-      const current = previousId ? one<{ runtime_conversation_id: string }>(this.ctx.db, "SELECT runtime_conversation_id FROM runtime_sessions WHERE id = ?", previousId) : undefined;
+      const current = previousId
+        ? one<{ runtime_conversation_id: string }>(this.ctx.db, "SELECT runtime_conversation_id FROM runtime_sessions WHERE id = ?", previousId)
+        : undefined;
       if (current && current.runtime_conversation_id === rt.conversationId) {
         run(this.ctx.db, "UPDATE runtime_sessions SET last_used_at = ?, knowledge_revision = ? WHERE id = ?", nowIso(), kr, previousId!);
         return;
@@ -676,7 +751,11 @@ export class AnswerService {
   ): Answer {
     const warnings = [...warningsIn];
     const byId = new Map(items.map((i) => [i.id, i]));
-    const stored = chunksById(this.ctx.db, projectId, items.map((i) => i.chunkId));
+    const stored = chunksById(
+      this.ctx.db,
+      projectId,
+      items.map((i) => i.chunkId),
+    );
     const citations: Citation[] = [];
     const evidenceToCitation = new Map<string, string>();
     for (const c of turn.citations) {
@@ -729,7 +808,11 @@ export class AnswerService {
     }));
     for (const it of items.filter((i) => i.authority === "open_conflict")) {
       if (!conflicts.some((c) => c.conflict_id === it.humanId)) {
-        conflicts.push({ summary: `${it.title} (open, unresolved)`, citation_ids: evidenceToCitation.has(it.id) ? [evidenceToCitation.get(it.id)!] : [], conflict_id: it.humanId });
+        conflicts.push({
+          summary: `${it.title} (open, unresolved)`,
+          citation_ids: evidenceToCitation.has(it.id) ? [evidenceToCitation.get(it.id)!] : [],
+          conflict_id: it.humanId,
+        });
       }
     }
 
@@ -748,7 +831,8 @@ export class AnswerService {
     if (status !== "answered") reasons.push(`Answer status is ${status}.`);
     if (turn.unresolved_questions.length) reasons.push(`${turn.unresolved_questions.length} question(s) remain unresolved.`);
     const inScope = (it: ContextItem) => !scope || it.scopes.length === 0 || it.scopes.includes(scope.toLowerCase());
-    for (const it of items.filter((i) => i.blockingOpen && inScope(i))) reasons.push(`Blocking ${it.authority === "open_conflict" ? "conflict" : "question"} ${it.humanId} is open.`);
+    for (const it of items.filter((i) => i.blockingOpen && inScope(i)))
+      reasons.push(`Blocking ${it.authority === "open_conflict" ? "conflict" : "question"} ${it.humanId} is open.`);
     if (scope) {
       const blockers = all<{ human_id: string; entity_type: string }>(
         this.ctx.db,
@@ -757,7 +841,9 @@ export class AnswerService {
         projectId,
         scope,
       );
-      for (const b of blockers) if (!reasons.some((r) => r.includes(b.human_id))) reasons.push(`Blocking ${b.entity_type.replace("_", " ")} ${b.human_id} is open in this feature scope.`);
+      for (const b of blockers)
+        if (!reasons.some((r) => r.includes(b.human_id)))
+          reasons.push(`Blocking ${b.entity_type.replace("_", " ")} ${b.human_id} is open in this feature scope.`);
     }
     if (!citations.some((c) => c.authority === "approved_requirement" || c.authority === "approved_decision")) {
       reasons.push("The answer is not backed by any approved requirement or decision; raw client evidence is not approved knowledge.");
@@ -772,7 +858,8 @@ export class AnswerService {
     if (provider === "demo-extractive") reasons.push("Demo mode does not assess readiness.");
     if (provider === "none") reasons.push("No model reasoning was performed.");
     if (verification?.removed.length) reasons.push(`The answer verifier removed ${verification.removed.length} claim(s) the evidence does not support.`);
-    if (provider === "antigravity-cli" && this.ctx.config.runtime.agentTeam && !verification && status !== "insufficient_evidence") reasons.push("The answer's claims were not verified.");
+    if (provider === "antigravity-cli" && this.ctx.config.runtime.agentTeam && !verification && status !== "insufficient_evidence")
+      reasons.push("The answer's claims were not verified.");
     const ready = reasons.length === 0;
 
     return {

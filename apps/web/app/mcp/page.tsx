@@ -2,6 +2,7 @@
 
 import type { Project } from "@jonathon/contracts";
 import { type FormEvent, useState } from "react";
+import { Modal } from "@/components/review";
 import { Shell } from "@/components/shell";
 import { Badge, Button, Card, Checkbox, Empty, ErrorBanner, Field, Input, PageHeader, Pagination, TableSkeleton, Time, table, usePaged } from "@/components/ui";
 import { type ApiError, get, post } from "@/lib/api";
@@ -38,6 +39,7 @@ function McpBody() {
   const [expires, setExpires] = useState("90");
   const [log, setLog] = useState<{ id: string; rows: Array<Record<string, string>> } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [revoking, setRevoking] = useState<{ id: string; name: string } | null>(null);
   const names = new Map((projects.data ?? []).map((p) => [p.id, p.name]));
   const tokenPage = usePaged(tokens.data, 10);
   const logPage = usePaged(log?.rows, 20, log?.id ?? null);
@@ -228,19 +230,7 @@ function McpBody() {
                               >
                                 Rotate
                               </Button>
-                              <Button
-                                variant="danger"
-                                onClick={async () => {
-                                  if (confirm(`Revoke ${t.name}? Clients using it stop working immediately.`)) {
-                                    try {
-                                      await post(`/mcp/tokens/${t.id}/revoke`);
-                                      void tokens.reload();
-                                    } catch (e) {
-                                      setError(e as ApiError);
-                                    }
-                                  }
-                                }}
-                              >
+                              <Button variant="danger" onClick={() => setRevoking({ id: t.id, name: t.name })}>
                                 Revoke
                               </Button>
                             </>
@@ -273,6 +263,37 @@ function McpBody() {
           )}
         </Card>
       </div>
+      <Modal
+        open={!!revoking}
+        onClose={() => setRevoking(null)}
+        tone="danger"
+        title={`Revoke ${revoking?.name ?? ""}?`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRevoking(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={async () => {
+                const r = revoking;
+                setRevoking(null);
+                if (!r) return;
+                try {
+                  await post(`/mcp/tokens/${r.id}/revoke`);
+                  void tokens.reload();
+                } catch (e) {
+                  setError(e as ApiError);
+                }
+              }}
+            >
+              Revoke
+            </Button>
+          </>
+        }
+      >
+        <p className="text-theme-sm text-gray-700 dark:text-gray-300">Clients using this credential stop working immediately. This cannot be undone.</p>
+      </Modal>
     </div>
   );
 }

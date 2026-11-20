@@ -692,8 +692,8 @@ function DeleteProject({ project }: { project: Project }) {
           <Notice tone="warning">
             This permanently removes every uploaded original, extraction, requirement, decision, question, conflict, proposal and its history, approvals,
             conversations and answers, generated documents, the memory graph, search index and jobs for <strong>{project.name}</strong>. MCP credentials lose
-            access to it (a credential limited to this project is revoked). It cannot be undone. The activity log keeps a record that the project was
-            deleted. Backups made earlier still contain it, and Jonathon cannot delete copies the model provider or Antigravity may hold.
+            access to it (a credential limited to this project is revoked). It cannot be undone. The activity log keeps a record that the project was deleted.
+            Backups made earlier still contain it, and Jonathon cannot delete copies the model provider or Antigravity may hold.
           </Notice>
           <ConfirmPhrase phrase={phrase} value={confirm} onChange={setConfirm} />
           <ErrorBanner error={error} />

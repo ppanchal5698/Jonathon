@@ -35,7 +35,14 @@ ${q}
 
 describe("live Antigravity CLI", () => {
   const dir = tempDir("jon-live-");
-  const rt = new AntigravityCliRuntime({ dataDir: dir, executable: process.env.AGY_PATH ?? "agy", extractionEffort: "low", timeoutMs: 240_000, maxOutputBytes: 4e6, maxPromptChars: 2e5 });
+  const rt = new AntigravityCliRuntime({
+    dataDir: dir,
+    executable: process.env.AGY_PATH ?? "agy",
+    extractionEffort: "low",
+    timeoutMs: 240_000,
+    maxOutputBytes: 4e6,
+    maxPromptChars: 2e5,
+  });
   let conv: string | null = null;
 
   it("is installed, compatible and authenticated", async () => {
@@ -47,8 +54,19 @@ describe("live Antigravity CLI", () => {
   });
 
   it("answers tool-free with schema-valid output, cites evidence, and does not obey injected instructions", async () => {
-    const r = await rt.run({ projectId: PID, prompt: prompt("How long is the verification link valid, and must email be verified before sign-in?"), schema: "answer" });
-    console.log("LIVE answer:", JSON.stringify({ completion: r.completion, status: r.envelopeStatus, model: r.model, version: r.runtimeVersion, ms: r.durationMs, structured: r.structured }, null, 2));
+    const r = await rt.run({
+      projectId: PID,
+      prompt: prompt("How long is the verification link valid, and must email be verified before sign-in?"),
+      schema: "answer",
+    });
+    console.log(
+      "LIVE answer:",
+      JSON.stringify(
+        { completion: r.completion, status: r.envelopeStatus, model: r.model, version: r.runtimeVersion, ms: r.durationMs, structured: r.structured },
+        null,
+        2,
+      ),
+    );
     expect(r.completion).toBe("success");
     expect(r.permissionDenials).toEqual([]);
     const t = ModelTurnSchema.parse(r.structured);

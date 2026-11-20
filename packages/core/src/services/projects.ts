@@ -116,9 +116,13 @@ export class ProjectService {
         const running = one<{ n: number }>(db, "SELECT COUNT(*) AS n FROM jobs WHERE project_id = ? AND status = 'running'", projectId)!.n;
         if (running) {
           // This transaction rolls back; the catch below asks the running jobs to stop.
-          throw new AppError("INVALID_TRANSITION", `${running} job(s) of this project are still running. They have been asked to stop; try again in a few seconds.`, {
-            details: { running },
-          });
+          throw new AppError(
+            "INVALID_TRANSITION",
+            `${running} job(s) of this project are still running. They have been asked to stop; try again in a few seconds.`,
+            {
+              details: { running },
+            },
+          );
         }
         counts = {
           sources: one<{ n: number }>(db, "SELECT COUNT(*) AS n FROM sources WHERE project_id = ?", projectId)!.n,

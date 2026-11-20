@@ -197,11 +197,25 @@ export class JobQueue {
     return toJob(r);
   }
 
+  /** Newest first. The status filter is applied in SQL, before the limit, so older matching jobs are not cut off. */
   list(filter: { projectId?: string; statuses?: JobStatus[]; limit?: number } = {}): Job[] {
-    const rows = filter.projectId
-      ? all<JobRow>(this.db, "SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT ?", filter.projectId, filter.limit ?? 100)
-      : all<JobRow>(this.db, "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", filter.limit ?? 100);
-    return rows.filter((r) => !filter.statuses || filter.statuses.includes(r.status)).map(toJob);
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (filter.projectId) {
+      where.push("project_id = ?");
+      params.push(filter.projectId);
+    }
+    if (filter.statuses?.length) {
+      where.push(`status IN (${filter.statuses.map(() => "?").join(",")})`);
+      params.push(...filter.statuses);
+    }
+    const rows = all<JobRow>(
+      this.db,
+      `SELECT * FROM jobs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT ?`,
+      ...params,
+      Math.min(Math.max(filter.limit ?? 100, 1), 1000),
+    );
+    return rows.map(toJob);
   }
 
   /**

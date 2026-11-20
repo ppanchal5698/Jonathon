@@ -61,7 +61,9 @@ if (scenario === "signin" || scenario === "signin-evil-url") {
       scenario === "signin-evil-url"
         ? "https://evil.example/o/oauth2/auth?client_id=x&code_challenge=y"
         : "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=fake.apps.googleusercontent.com&code_challenge=abc&code_challenge_method=S256&state=s1";
-    process.stdout.write(`Authentication required. Please visit the URL to log in:\n  ${url}\n\nWaiting for authentication (timeout 60s)...\nOr, paste the authorization code here and press Enter:\n`);
+    process.stdout.write(
+      `Authentication required. Please visit the URL to log in:\n  ${url}\n\nWaiting for authentication (timeout 60s)...\nOr, paste the authorization code here and press Enter:\n`,
+    );
     let line = "";
     const giveUp = setTimeout(() => {
       process.stderr.write("Error: authentication interrupted.\nerror: authentication failed or timed out\n");
@@ -75,10 +77,14 @@ if (scenario === "signin" || scenario === "signin-evil-url") {
       if (line.trim() === "4/0Agood-fixture-code") {
         mkdirSync(join(fakeHome, ".fake-agy"), { recursive: true });
         writeFileSync(tokenFile, JSON.stringify({ refresh_token: "fixture" }));
-        process.stdout.write(`${JSON.stringify({ event: "init", conversation_id: randomUUID(), init: { agent: flag("--agent"), permission_mode: "strict" } })}\n`);
+        process.stdout.write(
+          `${JSON.stringify({ event: "init", conversation_id: randomUUID(), init: { agent: flag("--agent"), permission_mode: "strict" } })}\n`,
+        );
         setInterval(() => {}, 1000); // keeps "running the prompt" until Jonathon kills it
       } else {
-        process.stderr.write('Error: authentication failed: token exchange failed: oauth2: "invalid_grant" "Bad Request"\nerror: authentication failed or timed out\n');
+        process.stderr.write(
+          'Error: authentication failed: token exchange failed: oauth2: "invalid_grant" "Bad Request"\nerror: authentication failed or timed out\n',
+        );
         process.exit(1);
       }
     });
@@ -102,11 +108,12 @@ let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () =>
-  signingIn ? undefined :
-  main().catch((e) => {
-    process.stderr.write(String(e));
-    process.exit(1);
-  }),
+  signingIn
+    ? undefined
+    : main().catch((e) => {
+        process.stderr.write(String(e));
+        process.exit(1);
+      }),
 );
 
 const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);

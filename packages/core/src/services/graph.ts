@@ -108,6 +108,16 @@ const FIELD_RELATION: Record<string, string> = {
   requirement_id: "changes",
 };
 
+/** Projects whose built graph and passage layer stay in memory; older ones are rebuilt on demand (fingerprint-keyed). */
+export const GRAPH_CACHE_PROJECTS = 4;
+
+/** Map insertion order as recency: re-insert on use, drop the oldest beyond `max`. */
+function remember<V>(map: Map<string, V>, key: string, value: V, max = GRAPH_CACHE_PROJECTS): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) map.delete(map.keys().next().value!);
+}
+
 export class GraphService {
   private cache = new Map<string, BuiltGraph>();
   /** Passage id → normalized text and its distinct words. A passage's text never changes for a given id. */
@@ -139,7 +149,10 @@ export class GraphService {
     );
     const key = `${ch?.n}|${ch?.l}|${revisionsKey}`;
     const cached = this.passageLayers.get(projectId);
-    if (cached?.key === key) return cached;
+    if (cached?.key === key) {
+      remember(this.passageLayers, projectId, cached);
+      return cached;
+    }
     const raw = all<ChunkRow>(
       this.ctx.db,
       "SELECT id, source_id, revision_id, title, heading, locator, text FROM chunks WHERE project_id = ? AND kind = 'evidence' ORDER BY source_id, ordinal",
@@ -169,7 +182,7 @@ export class GraphService {
       const live = new Set(raw.map((c) => c.id));
       for (const id of this.textCache.keys()) if (!live.has(id)) this.textCache.delete(id);
     }
-    this.passageLayers.set(projectId, layer);
+    remember(this.passageLayers, projectId, layer);
     return layer;
   }
 
@@ -391,9 +404,12 @@ export class GraphService {
   build(projectId: string): BuiltGraph {
     const fp = this.fingerprint(projectId);
     const cached = this.cache.get(projectId);
-    if (cached && cached.fingerprint === fp) return cached;
+    if (cached && cached.fingerprint === fp) {
+      remember(this.cache, projectId, cached);
+      return cached;
+    }
     const g = this.compute(projectId, fp);
-    this.cache.set(projectId, g);
+    remember(this.cache, projectId, g);
     return g;
   }
 

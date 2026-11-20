@@ -37,15 +37,7 @@ export function insertChunk(db: Db, c: ChunkInput): void {
     sha256(c.text),
     nowIso(),
   );
-  run(
-    db,
-    "INSERT INTO chunks_fts (text, heading, title, chunk_id, project_id) VALUES (?,?,?,?,?)",
-    c.text,
-    c.heading ?? "",
-    c.title,
-    c.id,
-    c.projectId,
-  );
+  run(db, "INSERT INTO chunks_fts (text, heading, title, chunk_id, project_id) VALUES (?,?,?,?,?)", c.text, c.heading ?? "", c.title, c.id, c.projectId);
 }
 
 function deleteChunkIds(db: Db, ids: string[]): void {

@@ -10,7 +10,6 @@ import {
   Badge,
   Button,
   Card,
-  Checkbox,
   Empty,
   ErrorBanner,
   Field,
@@ -268,11 +267,13 @@ function NewProject({ onCreated, onCancel }: { onCreated: () => void; onCancel: 
   const router = useRouter();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [ai, setAi] = useState(true);
+  // No default: sending client text to a model provider is an explicit choice for every project.
+  const [ai, setAi] = useState<boolean | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
+      if (ai === null) return;
       const p = await post<Project>("/projects", { name, description, ai_enabled: ai });
       onCreated();
       router.push(`/projects/${p.id}`);
@@ -284,18 +285,30 @@ function NewProject({ onCreated, onCancel }: { onCreated: () => void; onCancel: 
     <form onSubmit={submit} className="mb-6 space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:p-5 dark:border-gray-800 dark:bg-white/[0.02]">
       <Field label="Project name">{(id) => <Input id={id} value={name} onChange={(e) => setName(e.target.value)} required autoFocus />}</Field>
       <Field label="Description">{(id) => <Textarea id={id} rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field>
-      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-500 bg-amber-50 p-4 text-theme-sm text-gray-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-gray-300">
-        <Checkbox checked={ai} onChange={(e) => setAi(e.target.checked)} className="mt-0.5 size-5" />
-        <span>
-          <span className="block font-medium text-gray-800 dark:text-white/90">Draft requirements from uploaded documents with AI</span>
-          Each upload is sent to the Antigravity CLI, which forwards the text to its configured model provider and keeps transcripts locally. Jonathon then
-          proposes requirements, open questions, conflicts and changes for you to approve, edit, reject or delete. Untick to keep this project local-only; you
-          can change it later in Settings.
-        </span>
-      </label>
+      <fieldset className="space-y-3 rounded-xl border border-amber-500 bg-amber-50 p-4 text-theme-sm text-gray-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-gray-300">
+        <legend className="px-1 font-medium text-gray-800 dark:text-white/90">AI processing for this project (choose one)</legend>
+        <p>
+          With AI, each upload is sent to the Antigravity CLI, which forwards the text to its configured model provider and keeps transcripts locally. Jonathon
+          then proposes requirements, open questions, conflicts and changes for you to approve, edit, reject or delete. You can change this later in Settings.
+        </p>
+        <label className="flex cursor-pointer items-start gap-3">
+          <input type="radio" name="ai-processing" checked={ai === true} onChange={() => setAi(true)} className="mt-0.5 size-4" required />
+          <span>
+            <span className="font-medium text-gray-800 dark:text-white/90">Draft requirements from uploaded documents with AI</span>
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-3">
+          <input type="radio" name="ai-processing" checked={ai === false} onChange={() => setAi(false)} className="mt-0.5 size-4" />
+          <span>
+            <span className="font-medium text-gray-800 dark:text-white/90">Keep this project local-only (no AI)</span>
+          </span>
+        </label>
+      </fieldset>
       <ErrorBanner error={error} />
       <div className="flex gap-3">
-        <Button type="submit">Create</Button>
+        <Button type="submit" disabled={ai === null} title={ai === null ? "Choose whether AI processing is on" : undefined}>
+          Create
+        </Button>
         <Button variant="secondary" onClick={onCancel}>
           Cancel
         </Button>

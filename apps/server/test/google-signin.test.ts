@@ -1,24 +1,14 @@
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp, createLogger, DemoExtractiveRuntime, GoogleSignIn, type JonathonApp, loadConfig, redactUrl } from "@jonathon/core";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer } from "../src/server";
+import { freePort } from "./free-port";
 
 let PORT = 0;
 let BASE = "";
-/** Ask the OS for a free port (fixed ranges can fall into Windows' reserved port ranges). */
-const freePort = () =>
-  new Promise<number>((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const p = (s.address() as { port: number }).port;
-      s.close(() => resolve(p));
-    });
-  });
 const CLIENT_ID = "1234-test.apps.googleusercontent.com";
 const AUTH_URL = "https://accounts.example.test/auth";
 const TOKEN_URL = "https://oauth.example.test/token";
@@ -38,7 +28,10 @@ const fakeGoogle: typeof fetch = async (url, init) => {
   const body = new URLSearchParams(String(init?.body));
   tokenRequests.push(body);
   if (body.get("code") === "bad-code") return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
-  return new Response(JSON.stringify({ access_token: "ya29.x", id_token: jwt(nextIdentity) }), { status: 200, headers: { "content-type": "application/json" } });
+  return new Response(JSON.stringify({ access_token: "ya29.x", id_token: jwt(nextIdentity) }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 };
 
 async function start(): Promise<{ state: string; nonce: string; binder: string; location: URL }> {
@@ -85,6 +78,8 @@ beforeAll(async () => {
     JONATHON_WEB_ORIGINS: "http://localhost:3005,http://127.0.0.1:3005",
     JONATHON_GOOGLE_CLIENT_ID: CLIENT_ID,
     JONATHON_GOOGLE_CLIENT_SECRET: "test-secret-value",
+    // The intruder is allowed by the list, so the test proves the owner binding (sub) keeps them out.
+    JONATHON_GOOGLE_ALLOWED_EMAILS: "owner@example.com,intruder@example.com",
     JONATHON_ALLOW_TEST_HOOKS: "true",
     JONATHON_GOOGLE_AUTH_URL: AUTH_URL,
     JONATHON_GOOGLE_TOKEN_URL: TOKEN_URL,
@@ -105,7 +100,11 @@ describe("Sign in with Google as the only way in", () => {
     const st = (await (await fetch(`${BASE}/api/v1/setup/status`)).json()) as { data: { auth: string; set_up: boolean } };
     expect(st.data).toMatchObject({ auth: "google", set_up: false });
     for (const path of ["/api/v1/setup/account", "/api/v1/auth/login"]) {
-      const r = await fetch(`${BASE}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "parth", password: "correct horse battery" }) });
+      const r = await fetch(`${BASE}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "parth", password: "correct horse battery" }),
+      });
       expect(r.status).toBe(403);
     }
   });
@@ -162,7 +161,9 @@ describe("Sign in with Google as the only way in", () => {
     expect(tokenRequests[0]!.get("code_verifier")).toMatch(/.{43,}/);
     expect(tokenRequests[0]!.get("client_secret")).toBe("test-secret-value");
 
-    const me = (await (await fetch(`${BASE}/api/v1/auth/session`, { headers: { cookie: first.session! } })).json()) as { data: { username: string; csrf_token: string } };
+    const me = (await (await fetch(`${BASE}/api/v1/auth/session`, { headers: { cookie: first.session! } })).json()) as {
+      data: { username: string; csrf_token: string };
+    };
     expect(me.data.username).toBe("owner@example.com");
     // A normal mutation with that session + CSRF works.
     const created = await fetch(`${BASE}/api/v1/projects`, {
@@ -185,7 +186,10 @@ describe("Sign in with Google as the only way in", () => {
 
     const users = app.ctx.db.prepare("SELECT username, password_hash, google_sub, email FROM users").all();
     expect(users).toEqual([{ username: "owner@example.com", password_hash: "!", google_sub: "google-sub-owner", email: "owner@example.com" }]);
-    const audit = app.ctx.db.prepare("SELECT action, details FROM audit_events WHERE action IN ('account.created','session.login')").all() as { action: string; details: string }[];
+    const audit = app.ctx.db.prepare("SELECT action, details FROM audit_events WHERE action IN ('account.created','session.login')").all() as {
+      action: string;
+      details: string;
+    }[];
     expect(audit.map((a) => a.action)).toEqual(["account.created", "session.login", "session.login"]);
     expect(JSON.stringify(audit)).not.toMatch(/ya29|test-secret|good-/);
   });
@@ -214,6 +218,7 @@ describe("Sign in with Google as the only way in", () => {
       JONATHON_GOOGLE_REDIRECT_PATH: "/oauth2callback",
       JONATHON_GOOGLE_CLIENT_ID: CLIENT_ID,
       JONATHON_GOOGLE_CLIENT_SECRET: "test-secret-value",
+      JONATHON_GOOGLE_ALLOWED_EMAILS: "me@example.com",
     } as NodeJS.ProcessEnv);
     expect(c.google?.redirectUri).toBe("http://localhost:6969/oauth2callback");
     expect(() =>
@@ -222,11 +227,20 @@ describe("Sign in with Google as the only way in", () => {
         JONATHON_GOOGLE_REDIRECT_PATH: "/somewhere-else",
         JONATHON_GOOGLE_CLIENT_ID: CLIENT_ID,
         JONATHON_GOOGLE_CLIENT_SECRET: "test-secret-value",
+        JONATHON_GOOGLE_ALLOWED_EMAILS: "me@example.com",
       } as NodeJS.ProcessEnv),
     ).toThrow();
   });
 
-  it("JONATHON_GOOGLE_ALLOWED_EMAILS restricts even the first sign-in", () => {
+  it("an allow-list is required, and it restricts even the first sign-in", () => {
+    expect(() =>
+      loadConfig({
+        JONATHON_DATA_DIR: tmpdir(),
+        JONATHON_WEB_ORIGINS: "http://localhost:3005",
+        JONATHON_GOOGLE_CLIENT_ID: CLIENT_ID,
+        JONATHON_GOOGLE_CLIENT_SECRET: "test-secret-value",
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/ALLOWED_EMAILS is required/);
     const config = loadConfig({
       JONATHON_DATA_DIR: mkdtempSync(join(tmpdir(), "jon-google-allow-")),
       JONATHON_LOG_LEVEL: "silent",
@@ -238,7 +252,9 @@ describe("Sign in with Google as the only way in", () => {
     const a2 = createApp(config, { runtime: new DemoExtractiveRuntime(), log: createLogger("silent", "t") });
     try {
       const g = new GoogleSignIn(a2.ctx.db, config, a2.auth);
-      expect(() => (g as unknown as { bindOwner(i: { sub: string; email: string }): unknown }).bindOwner({ sub: "x", email: "someone@example.com" })).toThrow(/not allowed/);
+      expect(() => (g as unknown as { bindOwner(i: { sub: string; email: string }): unknown }).bindOwner({ sub: "x", email: "someone@example.com" })).toThrow(
+        /not allowed/,
+      );
       expect(a2.auth.isSetUp()).toBe(false);
     } finally {
       a2.close();
@@ -249,6 +265,7 @@ describe("Sign in with Google as the only way in", () => {
         JONATHON_WEB_ORIGINS: "http://localhost:3005",
         JONATHON_GOOGLE_CLIENT_ID: CLIENT_ID,
         JONATHON_GOOGLE_CLIENT_SECRET: "test-secret-value",
+        JONATHON_GOOGLE_ALLOWED_EMAILS: "me@example.com",
         JONATHON_GOOGLE_AUTH_URL: "https://evil.example",
       } as NodeJS.ProcessEnv),
     ).toThrow(/tests only/);

@@ -59,12 +59,7 @@ export class AuthService {
   /** Simple lockout: more than 10 failures in 15 minutes for a username → RATE_LIMITED. */
   async login(username: string, password: string): Promise<{ token: string; session: SessionInfo }> {
     const since = new Date(Date.now() - 15 * 60_000).toISOString();
-    const failures = one<{ n: number }>(
-      this.db,
-      "SELECT COUNT(*) AS n FROM login_attempts WHERE username = ? AND at > ? AND success = 0",
-      username,
-      since,
-    )!.n;
+    const failures = one<{ n: number }>(this.db, "SELECT COUNT(*) AS n FROM login_attempts WHERE username = ? AND at > ? AND success = 0", username, since)!.n;
     if (failures >= 10) throw new AppError("RATE_LIMITED", "too many failed sign-in attempts; wait 15 minutes");
     const user = one<{ id: string; username: string; password_hash: string }>(this.db, "SELECT * FROM users WHERE username = ?", username);
     // Verify against a dummy hash when the user does not exist to keep timing similar.

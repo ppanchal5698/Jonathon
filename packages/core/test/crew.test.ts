@@ -74,10 +74,19 @@ describe("agent team: deterministic gates", () => {
   });
 
   it("answers are split into claims and unsupported claims are removed cleanly", () => {
-    const md = "## Threshold\n\nPrice changes over 15% are flagged [E1]. Invented rule: links expire after 24 hours.\n\n- Unit changes are flagged too [E1].\n- Invented: approvals take one day.";
+    const md =
+      "## Threshold\n\nPrice changes over 15% are flagged [E1]. Invented rule: links expire after 24 hours.\n\n- Unit changes are flagged too [E1].\n- Invented: approvals take one day.";
     const claims = splitClaims(md);
-    expect(claims.map((c) => c.text)).toEqual(["Price changes over 15% are flagged [E1].", "Invented rule: links expire after 24 hours.", "Unit changes are flagged too [E1].", "Invented: approvals take one day."]);
-    const out = removeClaims(md, claims.filter((c) => c.text.startsWith("Invented")));
+    expect(claims.map((c) => c.text)).toEqual([
+      "Price changes over 15% are flagged [E1].",
+      "Invented rule: links expire after 24 hours.",
+      "Unit changes are flagged too [E1].",
+      "Invented: approvals take one day.",
+    ]);
+    const out = removeClaims(
+      md,
+      claims.filter((c) => c.text.startsWith("Invented")),
+    );
     expect(out).toBe("## Threshold\n\nPrice changes over 15% are flagged [E1].\n\n- Unit changes are flagged too [E1].");
   });
 });
@@ -86,10 +95,15 @@ describe("agent team: end to end with the fixture runtime", () => {
   it("each role runs once per batch; the verifier's rejections are applied and reported with reasons", async () => {
     t = makeApp({ scenario: "verifier-rejects" });
     const pid = t.app.projects.create(USER, { name: "Crew", ai_enabled: true }).id;
-    t.app.sources.ingest(USER, pid, { filename: "spec.md", bytes: enc("# Sign-up\n\nCustomers must verify their email address.\n\n# Links\n\nThe link expires after a while.") });
+    t.app.sources.ingest(USER, pid, {
+      filename: "spec.md",
+      bytes: enc("# Sign-up\n\nCustomers must verify their email address.\n\n# Links\n\nThe link expires after a while."),
+    });
     await drainJobs(t.app, ["ingest", "extract_knowledge"]);
     const job = t.app.ctx.db.prepare("SELECT result FROM jobs WHERE type = 'extract_knowledge'").get() as { result: string };
-    const r = JSON.parse(job.result) as { team: { document_kind: string; agents: Record<string, { runs: number }>; rejected: { text: string; by: string; reason: string }[] } };
+    const r = JSON.parse(job.result) as {
+      team: { document_kind: string; agents: Record<string, { runs: number }>; rejected: { text: string; by: string; reason: string }[] };
+    };
     expect(r.team.document_kind).toBe("requirements_spec");
     expect(Object.keys(r.team.agents).sort()).toEqual(["classify", "conflicts", "questions", "requirements", "verify_draft"]);
     expect(r.team.rejected).toEqual(
@@ -108,7 +122,10 @@ describe("agent team: end to end with the fixture runtime", () => {
   it("a plan or estimate only gets the questions and conflicts specialists", async () => {
     t = makeApp({ scenario: "extraction" });
     const pid = t.app.projects.create(USER, { name: "Plan", ai_enabled: true }).id;
-    t.app.sources.ingest(USER, pid, { filename: "tracker.md", bytes: enc("# Project plan\n\nMilestone 1: kickoff. Task: customers must verify their email address (build).") });
+    t.app.sources.ingest(USER, pid, {
+      filename: "tracker.md",
+      bytes: enc("# Project plan\n\nMilestone 1: kickoff. Task: customers must verify their email address (build)."),
+    });
     await drainJobs(t.app, ["ingest", "extract_knowledge"]);
     const job = t.app.ctx.db.prepare("SELECT result FROM jobs WHERE type = 'extract_knowledge'").get() as { result: string };
     const r = JSON.parse(job.result) as { team: { document_kind: string; agents: Record<string, unknown> } };

@@ -8,9 +8,10 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer } from "../src/server";
+import { freePort } from "./free-port";
 
-const PORT = 41_000 + Math.floor(Math.random() * 8_000);
-const BASE = `http://127.0.0.1:${PORT}`;
+let PORT = 0;
+let BASE = "";
 let app: JonathonApp;
 let server: FastifyInstance;
 let worker: JobWorker;
@@ -59,6 +60,8 @@ function toolJson(r: unknown): { isError?: boolean; body: Record<string, unknown
 }
 
 beforeAll(async () => {
+  PORT = await freePort();
+  BASE = `http://127.0.0.1:${PORT}`;
   dataDir = mkdtempSync(join(tmpdir(), "jon-srv-"));
   const config = loadConfig({
     JONATHON_DATA_DIR: dataDir,

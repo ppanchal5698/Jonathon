@@ -16,12 +16,23 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 const repo = findRepoRoot();
 const data = mkdtempSync(join(tmpdir(), "jon-live-"));
 const PORT = 4197;
-const env = { ...process.env, JONATHON_DATA_DIR: data, JONATHON_PORT: String(PORT), JONATHON_LOG_LEVEL: "warn", JONATHON_MODE: "live", JONATHON_ASK_WAIT_MS: "5000" };
+const env = {
+  ...process.env,
+  JONATHON_DATA_DIR: data,
+  JONATHON_PORT: String(PORT),
+  JONATHON_LOG_LEVEL: "warn",
+  JONATHON_MODE: "live",
+  JONATHON_ASK_WAIT_MS: "5000",
+};
 const B = `http://127.0.0.1:${PORT}/api/v1`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const kids: ChildProcess[] = [];
 const start = (file: string) => {
-  const c = spawn(process.execPath, [join(repo, "node_modules/tsx/dist/cli.mjs"), file], { cwd: join(repo, "apps/server"), env, stdio: ["ignore", "inherit", "inherit"] });
+  const c = spawn(process.execPath, [join(repo, "node_modules/tsx/dist/cli.mjs"), file], {
+    cwd: join(repo, "apps/server"),
+    env,
+    stdio: ["ignore", "inherit", "inherit"],
+  });
   kids.push(c);
 };
 
@@ -34,10 +45,18 @@ async function main() {
     } catch {}
     await sleep(500);
   }
-  const s = await fetch(`${B}/setup/account`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "parth", password: "live check password" }) });
+  const s = await fetch(`${B}/setup/account`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "parth", password: "live check password" }),
+  });
   const h = { cookie: s.headers.get("set-cookie")!.split(";")[0]!, "x-csrf-token": ((await s.json()) as any).data.csrf_token };
   const json = { ...h, "content-type": "application/json" };
-  const pid = ((await (await fetch(`${B}/projects`, { method: "POST", headers: json, body: JSON.stringify({ name: "Live check (fictional)", ai_enabled: true }) })).json()) as any).data.id;
+  const pid = (
+    (await (
+      await fetch(`${B}/projects`, { method: "POST", headers: json, body: JSON.stringify({ name: "Live check (fictional)", ai_enabled: true }) })
+    ).json()) as any
+  ).data.id;
   const fd = new FormData();
   fd.append("files", new Blob([readFileSync(join(repo, "packages/test-fixtures/demo/01-initial-requirements.md"))]), "01-initial-requirements.md");
   fd.append("files", new Blob([readFileSync(join(repo, "packages/test-fixtures/demo/02-follow-up-email.eml"))]), "02-follow-up-email.eml");
@@ -47,10 +66,16 @@ async function main() {
     if (srcs.every((x: any) => x.current?.extraction_status !== "pending")) break;
     await sleep(500);
   }
-  const tok = ((await (await fetch(`${B}/mcp/tokens`, { method: "POST", headers: json, body: JSON.stringify({ name: "live-check", project_ids: [pid], scopes: ["read"] }) })).json()) as any).data.token;
+  const tok = (
+    (await (
+      await fetch(`${B}/mcp/tokens`, { method: "POST", headers: json, body: JSON.stringify({ name: "live-check", project_ids: [pid], scopes: ["read"] }) })
+    ).json()) as any
+  ).data.token;
 
   const client = new Client({ name: "jonathon-live-check", version: "1.0.0" });
-  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${PORT}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${tok}` } } }));
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${PORT}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${tok}` } } }),
+  );
   const call = async (name: string, args: Record<string, unknown>) => JSON.parse(((await client.callTool({ name, arguments: args })) as any).content[0].text);
   console.log("tools:", (await client.listTools()).tools.map((t) => t.name).join(", "));
   const t0 = Date.now();
@@ -67,8 +92,37 @@ async function main() {
     if (j.answer) r = j.answer;
     else if (["failed", "cancelled"].includes(j.job?.status)) throw new Error(`job ${j.job.status}: ${j.job.error_code} ${j.job.error_message}`);
   }
-  console.log(JSON.stringify({ seconds: (Date.now() - t0) / 1000, status: r.status, provider: r.runtime?.provider, runtime_version: r.runtime?.runtime_version, answer: r.answer_markdown, citations: r.citations?.map((c: any) => ({ id: c.citation_id, doc: c.document_title, locator: c.locator, check: c.support_check, authority: c.authority })), unresolved: r.unresolved_questions, ready: r.implementation_ready, reasons: r.readiness_reasons, warnings: r.warnings }, null, 2));
-  const f = await call("ask_jonathon", { project_id: pid, message: "So can we implement link expiry now?", conversation_id: r.conversation_id, feature_scope: "email-verification", request_id: "live-check-0002" });
+  console.log(
+    JSON.stringify(
+      {
+        seconds: (Date.now() - t0) / 1000,
+        status: r.status,
+        provider: r.runtime?.provider,
+        runtime_version: r.runtime?.runtime_version,
+        answer: r.answer_markdown,
+        citations: r.citations?.map((c: any) => ({
+          id: c.citation_id,
+          doc: c.document_title,
+          locator: c.locator,
+          check: c.support_check,
+          authority: c.authority,
+        })),
+        unresolved: r.unresolved_questions,
+        ready: r.implementation_ready,
+        reasons: r.readiness_reasons,
+        warnings: r.warnings,
+      },
+      null,
+      2,
+    ),
+  );
+  const f = await call("ask_jonathon", {
+    project_id: pid,
+    message: "So can we implement link expiry now?",
+    conversation_id: r.conversation_id,
+    feature_scope: "email-verification",
+    request_id: "live-check-0002",
+  });
   let f2 = f;
   while (f2.status === "pending" && Date.now() - t0 < 600_000) {
     await sleep(3_000);
@@ -76,7 +130,19 @@ async function main() {
     if (j.answer) f2 = j.answer;
     else if (["failed", "cancelled"].includes(j.job?.status)) throw new Error(`follow-up job ${j.job.status}: ${j.job.error_code}`);
   }
-  console.log(JSON.stringify({ followup_status: f2.status, same_conversation: f2.conversation_id === r.conversation_id, context_rebuilt: f2.runtime?.context_rebuilt, ready: f2.implementation_ready, answer: f2.answer_markdown }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        followup_status: f2.status,
+        same_conversation: f2.conversation_id === r.conversation_id,
+        context_rebuilt: f2.runtime?.context_rebuilt,
+        ready: f2.implementation_ready,
+        answer: f2.answer_markdown,
+      },
+      null,
+      2,
+    ),
+  );
   await client.close();
 }
 

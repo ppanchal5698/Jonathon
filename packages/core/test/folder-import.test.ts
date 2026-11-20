@@ -32,7 +32,7 @@ describe("folder import", () => {
     const pid = t.app.projects.create(USER, { name: "Folder", ai_enabled: false }).id;
     const root = clientFolder();
 
-    const scan = t.app.folders.scan(USER, pid, { path: root, recursive: true });
+    const scan = await t.app.folders.scan(USER, pid, { path: root, recursive: true });
     const status = Object.fromEntries(scan.files.map((f) => [f.path, f.status]));
     expect(status).toMatchObject({ "brief.md": "new", "specs/rules.txt": "new", "specs/deep/notes.csv": "new", "specs/copy-of-brief.md": "new" });
     expect(status["specs/tool.exe"]).toBe("skipped");
@@ -44,15 +44,12 @@ describe("folder import", () => {
     expect(scan.groups.find((g) => g.folder === "specs")?.importable).toBe(3);
 
     // Not recursive: only the folder's own files.
-    expect(
-      t.app.folders
-        .scan(USER, pid, { path: root, recursive: false })
-        .files.filter((f) => f.status === "new")
-        .map((f) => f.path),
-    ).toEqual(["brief.md"]);
+    expect((await t.app.folders.scan(USER, pid, { path: root, recursive: false })).files.filter((f) => f.status === "new").map((f) => f.path)).toEqual([
+      "brief.md",
+    ]);
 
     // Only paths the scan offered are imported; anything else in the request is ignored.
-    const job = t.app.folders.queueImport(USER, pid, {
+    const job = await t.app.folders.queueImport(USER, pid, {
       path: root,
       recursive: true,
       files: ["brief.md", "specs/rules.txt", "specs/copy-of-brief.md", "../outside.md", "specs/tool.exe"],
@@ -69,17 +66,17 @@ describe("folder import", () => {
 
     // Second scan: imported files are unchanged; the content copy is a duplicate. Change one file → new revision.
     writeFileSync(join(root, "specs", "rules.txt"), "Orders over the limit need two managers.");
-    const again = t.app.folders.scan(USER, pid, { path: root, recursive: true });
+    const again = await t.app.folders.scan(USER, pid, { path: root, recursive: true });
     const s2 = Object.fromEntries(again.files.map((f) => [f.path, f.status]));
     expect(s2).toMatchObject({ "brief.md": "unchanged", "specs/rules.txt": "changed", "specs/copy-of-brief.md": "duplicate", "specs/deep/notes.csv": "new" });
-    t.app.folders.queueImport(USER, pid, { path: root, recursive: true, files: ["specs/rules.txt", "specs/deep/notes.csv"] });
+    await t.app.folders.queueImport(USER, pid, { path: root, recursive: true, files: ["specs/rules.txt", "specs/deep/notes.csv"] });
     await drainJobs(t.app, ["import_folder"]);
     const sources = t.app.sources.list(USER, pid);
     expect(sources.length).toBe(3);
     expect(sources.find((s) => s.display_name === "specs/rules.txt")!.current!.revision_number).toBe(2);
   });
 
-  it("refuses unsafe folders and non-human callers, and never follows links", () => {
+  it("refuses unsafe folders and non-human callers, and never follows links", async () => {
     t = makeApp({ scenario: "extraction" });
     const pid = t.app.projects.create(USER, { name: "Folder", ai_enabled: false }).id;
     const root = clientFolder();
@@ -94,7 +91,7 @@ describe("folder import", () => {
     const outside = tempDir("jon-outside-");
     writeFileSync(join(outside, "secret.md"), "not client material");
     symlinkSync(outside, join(root, "linked"), "junction");
-    const scan = t.app.folders.scan(USER, pid, { path: root, recursive: true });
+    const scan = await t.app.folders.scan(USER, pid, { path: root, recursive: true });
     expect(scan.files.find((f) => f.path === "linked")?.reason).toMatch(/link or junction/);
     expect(scan.files.some((f) => f.path.includes("secret"))).toBe(false);
     expect(() => t.app.folders.scan(USER, pid, { path: join(root, "linked"), recursive: true })).toThrow(/link or junction/);

@@ -4,26 +4,19 @@
     {
       "name": "jonathon",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": [
-        "dev"
-      ],
+      "runtimeArgs": ["dev"],
       "port": 3005
     },
     {
       "name": "jonathon-qa",
       "runtimeExecutable": "node",
-      "runtimeArgs": [
-        "scripts/qa.mjs"
-      ],
+      "runtimeArgs": ["scripts/qa.mjs"],
       "port": 3191
     },
     {
       "name": "jonathon-qa-reuse",
       "runtimeExecutable": "node",
-      "runtimeArgs": [
-        "scripts/qa.mjs",
-        "--reuse-last"
-      ],
+      "runtimeArgs": ["scripts/qa.mjs", "--reuse-last"],
       "port": 3191
     }
   ]
