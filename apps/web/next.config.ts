@@ -1,7 +1,11 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 
 const API = process.env.JONATHON_API_URL ?? "http://127.0.0.1:4100";
 const dev = process.env.NODE_ENV !== "production";
+/** Docker image builds set this: a self-contained server.js with only the traced dependencies (see Dockerfile). */
+const standalone = process.env.JONATHON_NEXT_STANDALONE === "1";
 
 /**
  * The browser only talks to this origin. /api/v1/* is proxied to the local Jonathon API so the session
@@ -9,11 +13,17 @@ const dev = process.env.NODE_ENV !== "production";
  */
 const config: NextConfig = {
   transpilePackages: ["@jonathon/contracts"],
+  // Rewrites are resolved at build time, so the Docker image bakes JONATHON_API_URL (http://server:4100) in.
+  ...(standalone ? { output: "standalone" as const, outputFileTracingRoot: join(dirname(fileURLToPath(import.meta.url)), "..", "..") } : {}),
   poweredByHeader: false,
   // A second instance (scripts/qa.mjs) uses its own build folder so two dev servers never share .next.
   distDir: /^\.next[\w-]*$/.test(process.env.JONATHON_NEXT_DIST_DIR ?? "") ? process.env.JONATHON_NEXT_DIST_DIR : ".next",
   async rewrites() {
-    return [{ source: "/api/v1/:path*", destination: `${API}/api/v1/:path*` }];
+    return [
+      { source: "/api/v1/:path*", destination: `${API}/api/v1/:path*` },
+      // Google OAuth redirect URI registered as <UI origin>/oauth2callback (JONATHON_GOOGLE_REDIRECT_PATH): same handler.
+      { source: "/oauth2callback", destination: `${API}/api/v1/auth/google/callback` },
+    ];
   },
   async headers() {
     const csp = [

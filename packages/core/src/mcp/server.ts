@@ -1,9 +1,9 @@
-import { EntityTypeSchema, SearchableTypeSchema } from "@jonathon/contracts";
+import { SearchableTypeSchema } from "@jonathon/contracts";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { JonathonApp } from "../app";
 import type { Principal } from "../security/principal";
-import { toAppError } from "../util";
+import { AppError, toAppError } from "../util";
 
 type McpPrincipal = Extract<Principal, { kind: "mcp_token" }>;
 
@@ -21,7 +21,7 @@ export function createMcpServer(app: JonathonApp, principal: McpPrincipal, corre
       instructions:
         "Jonathon is the requirements service for this repository. Confirm the project ID with list_projects. " +
         "Fetch approved requirements and decisions (get_feature_spec, get_requirement) before implementing. " +
-        "Drafts and AI suggestions are unapproved. Never invent missing business rules; report blockers to Parth. " +
+        "Drafts and AI suggestions are unapproved. Never invent missing business rules; report blockers to the project owner. " +
         "Propose changes with propose_requirement_change; you cannot approve anything.",
     },
   );
@@ -31,6 +31,12 @@ export function createMcpServer(app: JonathonApp, principal: McpPrincipal, corre
     async (args: A) => {
       const projectId = (args as { project_id?: string })?.project_id ?? null;
       try {
+        const since = new Date(Date.now() - 60_000).toISOString();
+        const recent = (
+          app.ctx.db.prepare("SELECT COUNT(*) AS n FROM mcp_access_log WHERE token_id = ? AND at > ?").get(principal.tokenId, since) as { n: number }
+        ).n;
+        if (recent >= app.ctx.config.mcpLimits.callsPerMinute)
+          throw new AppError("RATE_LIMITED", "too many calls with this token in the last minute; slow down");
         const result = await fn(args);
         app.auth.logMcpAccess(principal.tokenId, tool, projectId, "ok", null, correlationId);
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], structuredContent: result as Record<string, unknown> };
@@ -149,7 +155,7 @@ export function createMcpServer(app: JonathonApp, principal: McpPrincipal, corre
     "propose_requirement_change",
     {
       description:
-        "Propose a change to a requirement for Parth to review. Requires the 'propose' scope. Nothing is applied automatically. " +
+        "Propose a change to a requirement for the project owner to review. Requires the 'propose' scope. Nothing is applied automatically. " +
         "base_revision must equal the requirement's current revision.",
       inputSchema: z.object({
         project_id: ProjectId,
@@ -168,7 +174,7 @@ export function createMcpServer(app: JonathonApp, principal: McpPrincipal, corre
           proposal_id: r.proposal.human_id,
           status: r.proposal.status,
           idempotent_replay: r.idempotent_replay,
-          note: "Recorded for review by Parth. Not applied.",
+          note: "Recorded for the project owner to review. Not applied.",
         };
       },
     ),
@@ -240,6 +246,5 @@ export function createMcpServer(app: JonathonApp, principal: McpPrincipal, corre
     wrap("explore_memory_graph", (a: { project_id: string; node_id: string }) => app.graph.node(principal, a.project_id, a.node_id)),
   );
 
-  void EntityTypeSchema;
   return server;
 }

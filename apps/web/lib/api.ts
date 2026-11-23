@@ -37,7 +37,10 @@ export async function api<T>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
     if (csrfToken) headers["x-csrf-token"] = csrfToken;
   }
   const res = await fetch(`/api/v1${path}`, { method, headers, body: payload, credentials: "same-origin" });
-  const json = (await res.json().catch(() => null)) as { data?: T; error?: { code: string; message: string; correlation_id?: string; details?: unknown } } | null;
+  const json = (await res.json().catch(() => null)) as {
+    data?: T;
+    error?: { code: string; message: string; correlation_id?: string; details?: unknown };
+  } | null;
   if (!res.ok || !json || json.error) {
     const e = json?.error;
     if (res.status === 401 && typeof window !== "undefined" && !path.startsWith("/auth/") && !path.startsWith("/setup/")) {

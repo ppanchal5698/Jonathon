@@ -7,7 +7,12 @@ import { Fragment, type ReactNode } from "react";
  * It builds React elements only; raw HTML in the text is shown as text and never interpreted (stored-XSS
  * protection). Links are not rendered as links.
  */
-type Block = { kind: "h"; level: number; text: string } | { kind: "p"; lines: string[] } | { kind: "ul" | "ol"; items: string[] } | { kind: "quote"; lines: string[] } | { kind: "hr" };
+type Block =
+  | { kind: "h"; level: number; text: string }
+  | { kind: "p"; lines: string[] }
+  | { kind: "ul" | "ol"; items: string[] }
+  | { kind: "quote"; lines: string[] }
+  | { kind: "hr" };
 
 function parse(text: string): Block[] {
   const blocks: Block[] = [];
@@ -61,7 +66,14 @@ function parse(text: string): Block[] {
   return blocks.filter((b) => b.kind !== "p" || b.lines.length > 0);
 }
 
-const H_CLASS = ["text-base font-semibold", "text-base font-semibold", "text-theme-sm font-semibold", "text-theme-sm font-semibold", "text-theme-sm font-medium", "text-theme-sm font-medium"];
+const H_CLASS = [
+  "text-base font-semibold",
+  "text-base font-semibold",
+  "text-theme-sm font-semibold",
+  "text-theme-sm font-semibold",
+  "text-theme-sm font-medium",
+  "text-theme-sm font-medium",
+];
 
 export function Markdown({ text, onCite }: { text: string; onCite?: (token: string) => void }) {
   return (
@@ -128,18 +140,35 @@ function inline(s: string, onCite?: (t: string) => void): ReactNode[] {
   while (m) {
     if (m.index > last) out.push(s.slice(last, m.index));
     const tok = m[0];
-    if (tok.startsWith("**")) out.push(<strong key={m.index} className="font-semibold text-gray-800 dark:text-white/90">{tok.slice(2, -2)}</strong>);
+    if (tok.startsWith("**"))
+      out.push(
+        <strong key={m.index} className="font-semibold text-gray-800 dark:text-white/90">
+          {tok.slice(2, -2)}
+        </strong>,
+      );
     else if (tok.startsWith("*")) out.push(<em key={m.index}>{tok.slice(1, -1)}</em>);
-    else if (tok.startsWith("`")) out.push(<code key={m.index} className="rounded-md bg-gray-100 px-1 py-0.5 text-theme-xs dark:bg-white/5">{tok.slice(1, -1)}</code>);
+    else if (tok.startsWith("`"))
+      out.push(
+        <code key={m.index} className="rounded-md bg-gray-100 px-1 py-0.5 text-theme-xs dark:bg-white/5">
+          {tok.slice(1, -1)}
+        </code>,
+      );
     else {
       const label = tok.slice(1, -1);
       out.push(
         onCite ? (
-          <button key={m.index} type="button" onClick={() => onCite(label)} className="mx-0.5 rounded-md bg-brand-50 px-1.5 py-0.5 text-theme-xs font-medium text-brand-600 hover:bg-brand-100 dark:bg-brand-500/15 dark:text-brand-400 dark:hover:bg-brand-500/25">
+          <button
+            key={m.index}
+            type="button"
+            onClick={() => onCite(label)}
+            className="mx-0.5 rounded-md bg-brand-50 px-1.5 py-0.5 text-theme-xs font-medium text-brand-600 hover:bg-brand-100 dark:bg-brand-500/15 dark:text-brand-400 dark:hover:bg-brand-500/25"
+          >
             {label}
           </button>
         ) : (
-          <span key={m.index} className="mx-0.5 rounded-md bg-gray-100 px-1.5 py-0.5 text-theme-xs dark:bg-white/5">{label}</span>
+          <span key={m.index} className="mx-0.5 rounded-md bg-gray-100 px-1.5 py-0.5 text-theme-xs dark:bg-white/5">
+            {label}
+          </span>
         ),
       );
     }

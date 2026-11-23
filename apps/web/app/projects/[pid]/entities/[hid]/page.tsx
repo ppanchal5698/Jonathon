@@ -6,14 +6,32 @@ import { type FormEvent, Suspense, useState } from "react";
 import { Markdown } from "@/components/markdown";
 import { EntityEditor, needsReview, parseAddition, ReviewButtons, useReviewAction } from "@/components/review";
 import { Shell } from "@/components/shell";
-import { A, Badge, Button, Card, ConfirmPhrase, ErrorBanner, Field, Input, Loading, Notice, PageHeader, Select, Textarea, Time } from "@/components/ui";
+import {
+  A,
+  Badge,
+  Button,
+  Card,
+  ConfirmPhrase,
+  ErrorBanner,
+  Field,
+  Input,
+  ListSkeleton,
+  Notice,
+  PageHeader,
+  PageSkeleton,
+  Pagination,
+  Select,
+  Textarea,
+  Time,
+  usePaged,
+} from "@/components/ui";
 import { type ApiError, get, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
 export default function EntityPage() {
   return (
     <Shell>
-      <Suspense fallback={<Loading />}>
+      <Suspense fallback={<PageSkeleton label="item" />}>
         <EntityBody />
       </Suspense>
     </Shell>
@@ -27,7 +45,14 @@ const NEXT: Record<string, Record<string, string[]>> = {
   conflict: { open: ["dismissed"], dismissed: ["open"] },
   change_proposal: { open: ["accepted", "rejected"] },
 };
-const VERB: Record<string, string> = { approved: "approve", rejected: "reject", superseded: "supersede", dismissed: "dismiss", accepted: "accept", withdrawn: "withdraw" };
+const VERB: Record<string, string> = {
+  approved: "approve",
+  rejected: "reject",
+  superseded: "supersede",
+  dismissed: "dismiss",
+  accepted: "accept",
+  withdrawn: "withdraw",
+};
 
 function EntityBody() {
   const { pid, hid } = useParams<{ pid: string; hid: string }>();
@@ -39,6 +64,8 @@ function EntityBody() {
   const [error, setError] = useState<ApiError | null>(null);
   const [editing, setEditing] = useState(params.get("edit") === "1");
   const [done, setDone] = useState<string | null>(null);
+  const historyPage = usePaged(history.data?.events, 10);
+  const refPage = usePaged(e.data?.source_refs, 10);
   const reload = () => {
     setError(null);
     void e.reload();
@@ -53,7 +80,7 @@ function EntityBody() {
     reload();
   });
   if (e.error) return <ErrorBanner error={e.error} />;
-  if (!e.data) return <Loading />;
+  if (!e.data) return <PageSkeleton label="item" />;
   const ent = e.data;
 
   const crumbs = [
@@ -68,7 +95,9 @@ function EntityBody() {
         title={
           <>
             <span className="font-mono text-brand-500 dark:text-brand-400">{ent.human_id}</span>
-            <span className="text-gray-400"> · </span>
+            <span className="text-gray-500 dark:text-gray-400" aria-hidden="true">
+              {" · "}
+            </span>
             {ent.title}
           </>
         }
@@ -91,7 +120,10 @@ function EntityBody() {
         </div>
       )}
       {done && !error && (
-        <p role="status" className="mb-6 rounded-xl border border-green-500 bg-green-50 px-4 py-3 text-theme-sm text-gray-700 dark:border-green-500/30 dark:bg-green-500/15 dark:text-gray-300">
+        <p
+          role="status"
+          className="mb-6 rounded-xl border border-green-500 bg-green-50 px-4 py-3 text-theme-sm text-gray-700 dark:border-green-500/30 dark:bg-green-500/15 dark:text-gray-300"
+        >
           {done}
         </p>
       )}
@@ -127,24 +159,29 @@ function EntityBody() {
           )}
           <Card title="Source traceability" desc="Where this knowledge came from, with the exact passage.">
             {ent.source_refs.length ? (
-              <ul className="space-y-3">
-                {ent.source_refs.map((r, i) => (
-                  <li key={i} className="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
-                    <div className="flex flex-wrap items-center gap-2 text-theme-sm">
-                      {r.label && <Badge tone="orange">{r.label}</Badge>}
-                      <A href={`/projects/${pid}/sources/${r.source_id}`}>Open source</A>
-                      <span className="text-theme-xs text-gray-500 dark:text-gray-400">
-                        {Object.entries(r.locator)
-                          .map(([k, v]) => `${k} ${v}`)
-                          .join(", ")}
-                      </span>
-                    </div>
-                    {r.excerpt && (
-                      <blockquote className="mt-3 border-l-4 border-brand-200 pl-3 text-theme-sm whitespace-pre-wrap text-gray-600 dark:border-brand-800 dark:text-gray-300">{r.excerpt}</blockquote>
-                    )}
-                  </li>
-                ))}
-              </ul>
+              <>
+                <ul className="space-y-3">
+                  {refPage.items.map((r, i) => (
+                    <li key={i} className="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+                      <div className="flex flex-wrap items-center gap-2 text-theme-sm">
+                        {r.label && <Badge tone="orange">{r.label}</Badge>}
+                        <A href={`/projects/${pid}/sources/${r.source_id}`}>Open source</A>
+                        <span className="text-theme-xs text-gray-500 dark:text-gray-400">
+                          {Object.entries(r.locator)
+                            .map(([k, v]) => `${k} ${v}`)
+                            .join(", ")}
+                        </span>
+                      </div>
+                      {r.excerpt && (
+                        <blockquote className="mt-3 border-l-4 border-brand-200 pl-3 text-theme-sm whitespace-pre-wrap text-gray-600 dark:border-brand-800 dark:text-gray-300">
+                          {r.excerpt}
+                        </blockquote>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <Pagination paged={refPage} label="Source references" />
+              </>
             ) : (
               <p className="text-theme-sm text-gray-500 dark:text-gray-400">No source references. Treat this as human-authored.</p>
             )}
@@ -162,16 +199,24 @@ function EntityBody() {
             )}
           </Card>
           <Review key={`review-${ent.revision}`} pid={pid} ent={ent} onDone={reload} onError={setError} />
-          {ent.entity_type === "conflict" && ent.status === "open" && <ResolveConflict key={`resolve-${ent.revision}`} pid={pid} ent={ent} onDone={reload} onError={setError} />}
-          {ent.entity_type === "open_question" && ent.status === "open" && <AnswerQuestion key={`answer-${ent.revision}`} pid={pid} ent={ent} onDone={reload} onError={setError} />}
+          {ent.entity_type === "conflict" && ent.status === "open" && (
+            <ResolveConflict key={`resolve-${ent.revision}`} pid={pid} ent={ent} onDone={reload} onError={setError} />
+          )}
+          {ent.entity_type === "open_question" && ent.status === "open" && (
+            <AnswerQuestion key={`answer-${ent.revision}`} pid={pid} ent={ent} onDone={reload} onError={setError} />
+          )}
           <Card title="History">
+            {!history.data && !history.error && <ListSkeleton rows={3} label="history" />}
             {history.data && history.data.events.length === 0 && (
               <p className="text-theme-sm text-gray-500 dark:text-gray-400">No approval, rejection or resolution recorded yet.</p>
             )}
             <ol className={history.data?.events.length ? "relative space-y-4 border-l border-gray-200 pl-5 dark:border-gray-800" : "hidden"}>
-              {history.data?.events.map((ev) => (
+              {historyPage.items.map((ev) => (
                 <li key={ev.id} className="relative">
-                  <span className="absolute top-1.5 -left-[25px] size-2.5 rounded-full border-2 border-white bg-brand-500 dark:border-gray-900" aria-hidden="true" />
+                  <span
+                    className="absolute top-1.5 -left-[25px] size-2.5 rounded-full border-2 border-white bg-brand-500 dark:border-gray-900"
+                    aria-hidden="true"
+                  />
                   <p className="flex flex-wrap items-center gap-2 text-theme-sm text-gray-800 dark:text-white/90">
                     <Badge>{ev.action}</Badge> rev {ev.revision} by {ev.actor_id}
                   </p>
@@ -181,6 +226,7 @@ function EntityBody() {
                 </li>
               ))}
             </ol>
+            <Pagination paged={historyPage} label="History" />
             <dl className="mt-5 space-y-1 border-t border-gray-100 pt-4 text-theme-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
               <div>
                 <dt className="inline">Stored revisions: </dt>
@@ -209,7 +255,9 @@ const TAB_LABEL: Record<string, string> = {
 };
 
 function tabFor(t: string) {
-  return { requirement: "requirements", decision: "decisions", conflict: "conflicts", open_question: "questions", change_proposal: "proposals" }[t] ?? "overview";
+  return (
+    { requirement: "requirements", decision: "decisions", conflict: "conflicts", open_question: "questions", change_proposal: "proposals" }[t] ?? "overview"
+  );
 }
 
 const ENTITY_ID = /^(REQ|DEC|QUESTION|CONFLICT|CHANGE)-\d{3,6}$/;
@@ -221,7 +269,13 @@ function FieldValue({ pid, value }: { pid: string; value: unknown }) {
       {items.map((v, i) => (
         <span key={v + i}>
           {i > 0 && ", "}
-          {ENTITY_ID.test(v) ? <A href={`/projects/${pid}/entities/${v}`} className="font-mono">{v}</A> : v}
+          {ENTITY_ID.test(v) ? (
+            <A href={`/projects/${pid}/entities/${v}`} className="font-mono">
+              {v}
+            </A>
+          ) : (
+            v
+          )}
         </span>
       ))}
     </>
@@ -252,7 +306,9 @@ function Sections({ ent }: { ent: KnowledgeEntity }) {
         if (v === "" || (Array.isArray(v) && v.length === 0)) return null;
         return (
           <section key={k}>
-            <h3 className="mb-2 text-theme-sm font-semibold text-gray-800 dark:text-white/90">{k === "_extra" ? "Other notes (from manual edits)" : k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}</h3>
+            <h3 className="mb-2 text-theme-sm font-semibold text-gray-800 dark:text-white/90">
+              {k === "_extra" ? "Other notes (from manual edits)" : k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}
+            </h3>
             {typeof v === "string" ? (
               <Markdown text={v} />
             ) : (
@@ -266,10 +322,11 @@ function Sections({ ent }: { ent: KnowledgeEntity }) {
                         <Badge tone={add.basis === "AI-inferred" ? "primary" : "gray"}>{add.basis}</Badge>
                       </li>
                     );
-                  return typeof s === "string" ? <li key={i}>{s}</li> : (
+                  return typeof s === "string" ? (
+                    <li key={i}>{s}</li>
+                  ) : (
                     <li key={i}>
-                      {s.text}{" "}
-                      {s.basis === "ai_inferred" && <Badge tone="primary">AI-inferred</Badge>}{" "}
+                      {s.text} {s.basis === "ai_inferred" && <Badge tone="primary">AI-inferred</Badge>}{" "}
                       {s.basis === "source_stated" && <Badge tone="gray">source-stated</Badge>}{" "}
                       {s.basis === "human_authored" && <Badge tone="success">human-authored</Badge>}{" "}
                       {s.review_state === "proposed" && <Badge tone="warning">proposed, not reviewed</Badge>}
@@ -298,7 +355,12 @@ function Review({ pid, ent, onDone, onError }: { pid: string; ent: KnowledgeEnti
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await post(`/projects/${pid}/entities/${ent.human_id}/transition`, { to, expected_revision: ent.revision, confirmation: verb ? confirm : undefined, note: note || undefined });
+      await post(`/projects/${pid}/entities/${ent.human_id}/transition`, {
+        to,
+        expected_revision: ent.revision,
+        confirmation: verb ? confirm : undefined,
+        note: note || undefined,
+      });
       setConfirm("");
       onDone();
     } catch (err) {
@@ -309,15 +371,34 @@ function Review({ pid, ent, onDone, onError }: { pid: string; ent: KnowledgeEnti
     <Card title="Other status changes">
       {options.length > 0 && (
         <form onSubmit={submit} className="space-y-4">
-          <Field label="Change status to">{(id) => (
-            <Select id={id} value={to} onChange={(e) => { setTo(e.target.value); setConfirm(""); }}>
-              {options.map((o) => <option key={o} value={o}>{o.replace("_", " ")}</option>)}
-            </Select>
-          )}</Field>
+          <Field label="Change status to">
+            {(id) => (
+              <Select
+                id={id}
+                value={to}
+                onChange={(e) => {
+                  setTo(e.target.value);
+                  setConfirm("");
+                }}
+              >
+                {options.map((o) => (
+                  <option key={o} value={o}>
+                    {o.replace("_", " ")}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
           {verb && <ConfirmPhrase phrase={phrase} value={confirm} onChange={setConfirm} />}
           <Field label="Note (optional)">{(id) => <Input id={id} value={note} onChange={(e) => setNote(e.target.value)} />}</Field>
-          {to === "approved" && <p className="text-theme-xs text-gray-500 dark:text-gray-400">Approval is recorded for revision {ent.revision} and this exact content. Any later edit needs a new approval.</p>}
-          <Button type="submit" variant={to === "rejected" ? "danger" : "primary"} disabled={!!verb && confirm.trim().toLowerCase() !== phrase.toLowerCase()}>Apply</Button>
+          {to === "approved" && (
+            <p className="text-theme-xs text-gray-500 dark:text-gray-400">
+              Approval is recorded for revision {ent.revision} and this exact content. Any later edit needs a new approval.
+            </p>
+          )}
+          <Button type="submit" variant={to === "rejected" ? "danger" : "primary"} disabled={!!verb && confirm.trim().toLowerCase() !== phrase.toLowerCase()}>
+            Apply
+          </Button>
         </form>
       )}
     </Card>
@@ -333,20 +414,36 @@ function ResolveConflict({ pid, ent, onDone, onError }: { pid: string; ent: Know
   const phrase = `resolve ${ent.human_id}`;
   return (
     <Card title="Resolve with a decision">
-      <form className="space-y-4" onSubmit={async (e) => {
-        e.preventDefault();
-        try {
-          await post(`/projects/${pid}/conflicts/${ent.human_id}/resolve`, { expected_revision: ent.revision, question, selected, rationale, options: sides, confirmation: confirm });
-          onDone();
-        } catch (err) {
-          onError(err as ApiError);
-        }
-      }}>
+      <form
+        className="space-y-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          try {
+            await post(`/projects/${pid}/conflicts/${ent.human_id}/resolve`, {
+              expected_revision: ent.revision,
+              question,
+              selected,
+              rationale,
+              options: sides,
+              confirmation: confirm,
+            });
+            onDone();
+          } catch (err) {
+            onError(err as ApiError);
+          }
+        }}
+      >
         <Field label="Decision question">{(id) => <Input id={id} value={question} onChange={(e) => setQuestion(e.target.value)} required />}</Field>
-        <Field label="Selected outcome" hint="Your decision as the business owner. Not inferred from the sources.">{(id) => <Textarea id={id} rows={2} value={selected} onChange={(e) => setSelected(e.target.value)} required />}</Field>
-        <Field label="Rationale">{(id) => <Textarea id={id} rows={2} value={rationale} onChange={(e) => setRationale(e.target.value)} required minLength={3} />}</Field>
+        <Field label="Selected outcome" hint="Your decision as the business owner. Not inferred from the sources.">
+          {(id) => <Textarea id={id} rows={2} value={selected} onChange={(e) => setSelected(e.target.value)} required />}
+        </Field>
+        <Field label="Rationale">
+          {(id) => <Textarea id={id} rows={2} value={rationale} onChange={(e) => setRationale(e.target.value)} required minLength={3} />}
+        </Field>
         <ConfirmPhrase phrase={phrase} value={confirm} onChange={setConfirm} />
-        <Button type="submit" disabled={confirm.trim().toLowerCase() !== phrase.toLowerCase()}>Record approved decision</Button>
+        <Button type="submit" disabled={confirm.trim().toLowerCase() !== phrase.toLowerCase()}>
+          Record approved decision
+        </Button>
       </form>
     </Card>
   );
@@ -358,18 +455,25 @@ function AnswerQuestion({ pid, ent, onDone, onError }: { pid: string; ent: Knowl
   const phrase = `answer ${ent.human_id}`;
   return (
     <Card title="Record the answer">
-      <form className="space-y-4" onSubmit={async (e) => {
-        e.preventDefault();
-        try {
-          await post(`/projects/${pid}/questions/${ent.human_id}/answer`, { expected_revision: ent.revision, resolution, confirmation: confirm });
-          onDone();
-        } catch (err) {
-          onError(err as ApiError);
-        }
-      }}>
-        <Field label="Answer" hint="Record what the client or you decided.">{(id) => <Textarea id={id} rows={3} value={resolution} onChange={(e) => setResolution(e.target.value)} required />}</Field>
+      <form
+        className="space-y-4"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          try {
+            await post(`/projects/${pid}/questions/${ent.human_id}/answer`, { expected_revision: ent.revision, resolution, confirmation: confirm });
+            onDone();
+          } catch (err) {
+            onError(err as ApiError);
+          }
+        }}
+      >
+        <Field label="Answer" hint="Record what the client or you decided.">
+          {(id) => <Textarea id={id} rows={3} value={resolution} onChange={(e) => setResolution(e.target.value)} required />}
+        </Field>
         <ConfirmPhrase phrase={phrase} value={confirm} onChange={setConfirm} />
-        <Button type="submit" disabled={confirm.trim().toLowerCase() !== phrase.toLowerCase()}>Save answer</Button>
+        <Button type="submit" disabled={confirm.trim().toLowerCase() !== phrase.toLowerCase()}>
+          Save answer
+        </Button>
       </form>
     </Card>
   );
@@ -383,20 +487,57 @@ function Diff({ pid, hid, revisions }: { pid: string; hid: string; revisions: nu
   const f = from ?? revisions[revisions.length - 2]!;
   const t = to ?? revisions[revisions.length - 1]!;
   return (
-    <Card title="Revision diff" actions={
-      <div className="flex items-end gap-3">
-        <Field label="From">{(id) => <Select id={id} value={f} onChange={(e) => setFrom(Number(e.target.value))}>{revisions.map((r) => <option key={r}>{r}</option>)}</Select>}</Field>
-        <Field label="To">{(id) => <Select id={id} value={t} onChange={(e) => setTo(Number(e.target.value))}>{revisions.map((r) => <option key={r}>{r}</option>)}</Select>}</Field>
-        <Button variant="secondary" onClick={async () => setLines((await get<{ lines: { op: string; text: string }[] }>(`/projects/${pid}/entities/${hid}/diff?from=${f}&to=${t}`)).lines)}>Compare</Button>
-      </div>
-    }>
+    <Card
+      title="Revision diff"
+      actions={
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="From">
+            {(id) => (
+              <Select id={id} value={f} onChange={(e) => setFrom(Number(e.target.value))}>
+                {revisions.map((r) => (
+                  <option key={r}>{r}</option>
+                ))}
+              </Select>
+            )}
+          </Field>
+          <Field label="To">
+            {(id) => (
+              <Select id={id} value={t} onChange={(e) => setTo(Number(e.target.value))}>
+                {revisions.map((r) => (
+                  <option key={r}>{r}</option>
+                ))}
+              </Select>
+            )}
+          </Field>
+          <Button
+            variant="secondary"
+            onClick={async () =>
+              setLines((await get<{ lines: { op: string; text: string }[] }>(`/projects/${pid}/entities/${hid}/diff?from=${f}&to=${t}`)).lines)
+            }
+          >
+            Compare
+          </Button>
+        </div>
+      }
+    >
       {lines && (
         <pre className="custom-scrollbar max-h-96 overflow-auto rounded-xl border border-gray-200 bg-gray-50 p-3 text-theme-xs dark:border-gray-800 dark:bg-white/[0.02]">
-          {lines.filter((l, i, a) => l.op !== " " || a[i - 1]?.op !== " " || a[i + 1]?.op !== " ").map((l, i) => (
-            <div key={i} className={l.op === "+" ? "bg-green-50 text-green-700 dark:bg-green-500/15 dark:text-green-400" : l.op === "-" ? "bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-400" : "text-gray-500"}>
-              {l.op} {l.text}
-            </div>
-          ))}
+          {lines
+            .filter((l, i, a) => l.op !== " " || a[i - 1]?.op !== " " || a[i + 1]?.op !== " ")
+            .map((l, i) => (
+              <div
+                key={i}
+                className={
+                  l.op === "+"
+                    ? "bg-green-50 text-green-700 dark:bg-green-500/15 dark:text-green-400"
+                    : l.op === "-"
+                      ? "bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-400"
+                      : "text-gray-500 dark:text-gray-400"
+                }
+              >
+                {l.op} {l.text}
+              </div>
+            ))}
         </pre>
       )}
     </Card>

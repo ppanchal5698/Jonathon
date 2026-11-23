@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import type { ExtractionStatus, Locator } from "@jonathon/contracts";
 import YAML from "yaml";
 import { z } from "zod";
@@ -166,6 +166,74 @@ export class ProjectFiles {
   }
 
   /** Human-confirmed deletion: removes the source's originals and extraction artifacts. */
+  // ----- whole-project deletion (crash-safe; see ProjectService.delete) -----
+
+  /**
+   * Move projects/<id> and runtime-workspaces/<id> into staging/deleted-projects/<id>/ with one rename each. Atomic on
+   * one filesystem: readers see the folder either in place or gone. Returns false when there was nothing to move.
+   */
+  stageProjectDeletion(projectId: string): boolean {
+    assertSafeSegment(projectId);
+    const target = resolveInside(this.dataDir, "staging", "deleted-projects", projectId);
+    rmSync(target, { recursive: true, force: true }); // leftover of an earlier, already-committed attempt
+    ensureDirInside(this.dataDir, "staging", "deleted-projects", projectId);
+    let moved = false;
+    for (const area of ["projects", "runtime-workspaces"]) {
+      const from = resolveInside(this.dataDir, area, projectId);
+      if (!existsSync(from)) continue;
+      try {
+        renameSync(from, resolveInside(this.dataDir, "staging", "deleted-projects", projectId, area));
+        moved = true;
+      } catch (e) {
+        this.unstageProjectDeletion(projectId);
+        throw new AppError("STORAGE_UNAVAILABLE", "could not move the project's files (is a file open in another program?)", { cause: e, retryable: true });
+      }
+    }
+    return moved;
+  }
+
+  /** Undo stageProjectDeletion (the database transaction did not commit). */
+  unstageProjectDeletion(projectId: string): void {
+    for (const area of ["projects", "runtime-workspaces"]) {
+      const staged = resolveInside(this.dataDir, "staging", "deleted-projects", projectId, area);
+      const home = resolveInside(this.dataDir, area, projectId);
+      if (existsSync(staged) && !existsSync(home)) {
+        ensureDirInside(this.dataDir, area);
+        renameSync(staged, home);
+      }
+    }
+    rmSync(resolveInside(this.dataDir, "staging", "deleted-projects", projectId), { recursive: true, force: true });
+  }
+
+  /** Remove the staged copy for good (after the database transaction committed). */
+  purgeStagedProject(projectId: string): void {
+    rmSync(resolveInside(this.dataDir, "staging", "deleted-projects", projectId), { recursive: true, force: true, maxRetries: 3 });
+  }
+
+  /**
+   * Startup recovery for an interrupted project deletion: if the database still has the project, the transaction never
+   * committed, so the files go back; otherwise the deletion committed and the staged files are removed.
+   */
+  sweepDeletedProjects(projectExists: (projectId: string) => boolean): { restored: string[]; purged: string[] } {
+    const out = { restored: [] as string[], purged: [] as string[] };
+    let names: string[] = [];
+    try {
+      names = readdirSync(resolveInside(this.dataDir, "staging", "deleted-projects")).filter((n) => /^prj_[0-9a-z]{26}$/.test(n));
+    } catch {
+      return out;
+    }
+    for (const pid of names) {
+      if (projectExists(pid)) {
+        this.unstageProjectDeletion(pid);
+        out.restored.push(pid);
+      } else {
+        this.purgeStagedProject(pid);
+        out.purged.push(pid);
+      }
+    }
+    return out;
+  }
+
   deleteSourceFiles(projectId: string, sourceId: string): void {
     for (const area of ["sources", "extracted"]) {
       const p = resolveInside(this.dataDir, "projects", projectId, area, sourceId);

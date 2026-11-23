@@ -6,7 +6,8 @@
 // Usage: node fake-agy.mjs --scenario <name> [--record <file>] [--pidfile <file>] -- <agy args...>
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const argv = process.argv.slice(2);
 const sep = argv.indexOf("--");
@@ -32,6 +33,64 @@ if (args.includes("--help")) {
   );
   process.exit(0);
 }
+// ----- Google sign-in imitation (scenarios "signin", "signin-evil-url"), modelled on agy 1.5.13 in a Linux container:
+// print the OAuth URL, read the authorization code from stdin, store tokens in files under $HOME, then start the run.
+const fakeHome = process.env.HOME || process.env.USERPROFILE || "";
+const tokenFile = join(fakeHome, ".fake-agy", "oauth_tokens.json");
+let signingIn = false;
+if ((scenario === "signin" || scenario === "signin-evil-url") && args.includes("-p") && existsSync(tokenFile)) {
+  // Already signed in: the probe prompt simply starts.
+  signingIn = true;
+  process.stdout.write(`${JSON.stringify({ event: "init", conversation_id: randomUUID(), init: { agent: flag("--agent"), permission_mode: "strict" } })}
+`);
+  setInterval(() => {}, 1000);
+}
+if (scenario === "signin" || scenario === "signin-evil-url") {
+  if (args[0] === "models") {
+    if (existsSync(tokenFile)) {
+      process.stdout.write("Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\n");
+      process.exit(0);
+    }
+    process.stdout.write("Fetching available models...\n");
+    process.stderr.write("Error: Please sign in to view available models. Launch the CLI without arguments to sign in.\n");
+    process.exit(1);
+  }
+  if (args.includes("-p") && !existsSync(tokenFile) && !signingIn) {
+    signingIn = true;
+    const url =
+      scenario === "signin-evil-url"
+        ? "https://evil.example/o/oauth2/auth?client_id=x&code_challenge=y"
+        : "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=fake.apps.googleusercontent.com&code_challenge=abc&code_challenge_method=S256&state=s1";
+    process.stdout.write(
+      `Authentication required. Please visit the URL to log in:\n  ${url}\n\nWaiting for authentication (timeout 60s)...\nOr, paste the authorization code here and press Enter:\n`,
+    );
+    let line = "";
+    const giveUp = setTimeout(() => {
+      process.stderr.write("Error: authentication interrupted.\nerror: authentication failed or timed out\n");
+      process.exit(1);
+    }, 60_000);
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (d) => {
+      line += d;
+      if (!line.includes("\n")) return;
+      clearTimeout(giveUp);
+      if (line.trim() === "4/0Agood-fixture-code") {
+        mkdirSync(join(fakeHome, ".fake-agy"), { recursive: true });
+        writeFileSync(tokenFile, JSON.stringify({ refresh_token: "fixture" }));
+        process.stdout.write(
+          `${JSON.stringify({ event: "init", conversation_id: randomUUID(), init: { agent: flag("--agent"), permission_mode: "strict" } })}\n`,
+        );
+        setInterval(() => {}, 1000); // keeps "running the prompt" until Jonathon kills it
+      } else {
+        process.stderr.write(
+          'Error: authentication failed: token exchange failed: oauth2: "invalid_grant" "Bad Request"\nerror: authentication failed or timed out\n',
+        );
+        process.exit(1);
+      }
+    });
+  }
+}
+
 if (args[0] === "models") {
   if (scenario === "auth-required") {
     process.stderr.write("error: authentication required\n");
@@ -49,10 +108,12 @@ let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () =>
-  main().catch((e) => {
-    process.stderr.write(String(e));
-    process.exit(1);
-  }),
+  signingIn
+    ? undefined
+    : main().catch((e) => {
+        process.stderr.write(String(e));
+        process.exit(1);
+      }),
 );
 
 const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);

@@ -1,0 +1,198 @@
+# Jonathon on Docker Compose: single host, single user. Not highly available.
+#
+#   cp docker/compose.env.example docker/compose.env      # then edit it
+#   docker compose --env-file docker/compose.env up -d --build
+#   open http://localhost:3005
+#
+# Full guide: docs/docker.md. Compose variables use the JONATHON_DOCKER_* / JONATHON_HOST_* prefixes so they never
+# collide with the repository's .env (which configures the non-Docker `pnpm dev` stack).
+
+name: jonathon
+
+x-app-env: &app-env
+  JONATHON_MODE: ${JONATHON_DOCKER_MODE:-demo}
+  JONATHON_DATA_DIR: /data
+  # Containers listen on 0.0.0.0 INSIDE the container network. Host exposure is the `ports:` lines below (loopback only).
+  JONATHON_CONTAINER: "true"
+  JONATHON_HOST: 0.0.0.0
+  JONATHON_PORT: "4100"
+  # Browser origin = the UI on the host. The API also answers to its internal service name (the web proxy uses it).
+  JONATHON_WEB_ORIGINS: http://127.0.0.1:${JONATHON_DOCKER_UI_PORT:-3005},http://localhost:${JONATHON_DOCKER_UI_PORT:-3005}
+  # server:4100 = the web proxy; 127.0.0.1/localhost:<published MCP port> = Claude Code on the host when that port is remapped.
+  JONATHON_ALLOWED_HOSTS: server:4100,127.0.0.1:${JONATHON_DOCKER_MCP_PORT:-4100},localhost:${JONATHON_DOCKER_MCP_PORT:-4100}
+  JONATHON_MCP_PUBLIC_URL: http://127.0.0.1:${JONATHON_DOCKER_MCP_PORT:-4100}/mcp
+  # A missing or wrong data mount must fail, not start an empty installation (see apps/server/src/cli/init-data.ts).
+  JONATHON_REQUIRE_EXISTING_DATA: "true"
+  JONATHON_IMPORT_ROOTS: /imports
+  JONATHON_LOG_LEVEL: ${JONATHON_DOCKER_LOG_LEVEL:-info}
+  JONATHON_WORKER_CONCURRENCY: ${JONATHON_DOCKER_WORKER_CONCURRENCY:-2}
+  JONATHON_JOB_MAX_ATTEMPTS: ${JONATHON_DOCKER_JOB_MAX_ATTEMPTS:-3}
+  AGY_PATH: ${JONATHON_DOCKER_AGY_PATH:-agy}
+
+x-hardening: &hardening
+  init: true # tini as PID 1: forwards SIGTERM, reaps orphaned subprocesses
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m,mode=1777
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  # Run as the owner of the data folder. Default 1000:1000 (the image's `node` user). On Linux set these to your
+  # uid/gid (`id -u`, `id -g`) when bind-mounting a host folder. Never chmod 777 the data folder.
+  user: "${JONATHON_DOCKER_UID:-1000}:${JONATHON_DOCKER_GID:-1000}"
+
+x-data-volume: &data-volume
+  # Default: Docker-managed volume (local ext4 inside Docker's VM: safe SQLite locking on every OS).
+  # Set JONATHON_HOST_DATA_DIR to an absolute host path to bind-mount instead (validated on Linux native disks only;
+  # see docs/docker.md "Storage" before using a Windows or macOS folder).
+  type: ${JONATHON_DOCKER_DATA_MOUNT_TYPE:-volume}
+  source: ${JONATHON_HOST_DATA_DIR:-jonathon-data}
+  target: /data
+
+services:
+  # One-shot: verify the data mount (refuses an empty/unknown folder unless JONATHON_INIT_NEW_DATA_DIR=true),
+  # apply pending additive migrations, check FTS5. API and worker start only after it exits 0.
+  init:
+    build: { context: ., target: server }
+    image: jonathon-server:local
+    <<: *hardening
+    command: ["node", "--import", "tsx", "src/cli/init-data.ts"]
+    environment:
+      <<: *app-env
+      JONATHON_INIT_NEW_DATA_DIR: ${JONATHON_INIT_NEW_DATA_DIR:-false}
+    volumes:
+      - *data-volume
+    restart: "no"
+    network_mode: none
+
+  server:
+    image: jonathon-server:local
+    <<: *hardening
+    depends_on:
+      init: { condition: service_completed_successfully }
+    environment:
+      <<: *app-env
+      # The API image has no agy: runtime status, authentication checks and Google sign-in run in the worker.
+      JONATHON_RUNTIME_IN_WORKER: "true"
+      # REST stays on 4100 inside the network (the web proxy); MCP gets its own listener on 4101, the only one published.
+      JONATHON_MCP_PORT: "4101"
+      # Sign in with Google for Jonathon itself. When the client id is set, it is the ONLY way to sign in.
+      # Redirect URI to register in Google Cloud Console: http://localhost:<UI port>/api/v1/auth/google/callback
+      JONATHON_GOOGLE_CLIENT_ID: ${JONATHON_GOOGLE_CLIENT_ID:-}
+      JONATHON_GOOGLE_CLIENT_SECRET: ${JONATHON_GOOGLE_CLIENT_SECRET:-}
+      JONATHON_GOOGLE_ALLOWED_EMAILS: ${JONATHON_GOOGLE_ALLOWED_EMAILS:-}
+      JONATHON_PUBLIC_URL: http://localhost:${JONATHON_DOCKER_UI_PORT:-3005}
+      JONATHON_GOOGLE_REDIRECT_PATH: ${JONATHON_GOOGLE_REDIRECT_PATH:-}
+    volumes:
+      - *data-volume
+      - type: bind
+        source: ${JONATHON_HOST_IMPORT_DIR:-./docker/empty-imports}
+        target: /imports
+        read_only: true
+    # MCP for Claude Code on the host: http://127.0.0.1:4100/mcp (bearer token), loopback only. This published port is
+    # the MCP-only listener: /api/v1 is not served on it (404). To disable host MCP access, remove this entry.
+    ports:
+      - "${JONATHON_DOCKER_MCP_BIND:-127.0.0.1}:${JONATHON_DOCKER_MCP_PORT:-4100}:4101"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/api/v1/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+  worker:
+    build: { context: ., target: worker }
+    image: jonathon-worker:local
+    <<: *hardening
+    depends_on:
+      init: { condition: service_completed_successfully }
+    command: ["node", "--import", "tsx", "src/worker.ts"]
+    environment:
+      <<: *app-env
+      JONATHON_HEALTH_FILE: /tmp/worker-health
+      AGY_PATH: /usr/local/bin/agy
+      # agy's policy files and empty working folders: on the container's tmpfs, outside the client-data volume.
+      JONATHON_RUNTIME_DIR: /tmp/jonathon-runtime
+    volumes:
+      - *data-volume
+      # agy's home: its Google sign-in (token files) lives here, never in the image or the client-data volume.
+      # "Sign out" on the Setup page removes it; `docker volume rm jonathon-agy-home` does too.
+      - type: volume
+        source: agy-home
+        target: /home/agy
+      - type: bind
+        source: ${JONATHON_HOST_IMPORT_DIR:-./docker/empty-imports}
+        target: /imports
+        read_only: true
+    healthcheck:
+      # Healthy while the worker's own heartbeat row (written by its job loop) is fresher than 30 s.
+      test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/worker-health');process.exit(Date.now()-s.mtimeMs<45000?0:1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    # Long enough to abort running jobs, kill AI subprocess trees and release leases (worker.stop waits 10 s).
+    stop_grace_period: 40s
+
+  web:
+    build:
+      context: .
+      target: web
+      args:
+        JONATHON_API_URL: http://server:4100
+    image: jonathon-web:local
+    <<: *hardening
+    depends_on:
+      server: { condition: service_healthy }
+    # No data, import or backup mounts: the UI never touches client files.
+    ports:
+      - "127.0.0.1:${JONATHON_DOCKER_UI_PORT:-3005}:3005"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3005/api/v1/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    restart: unless-stopped
+    stop_grace_period: 10s
+
+  # ---- operator tools (not started by `up`): docker compose --profile tools run --rm <name> ... ----
+  backup:
+    profiles: [tools]
+    image: jonathon-server:local
+    <<: *hardening
+    entrypoint: ["node", "--import", "tsx", "src/cli/backup.ts"]
+    command: ["--help"]
+    environment: *app-env
+    volumes:
+      - *data-volume
+      - type: bind
+        source: ${JONATHON_HOST_BACKUP_DIR:-./docker/backups}
+        target: /backups
+    network_mode: none
+
+  restore:
+    profiles: [tools]
+    image: jonathon-server:local
+    <<: *hardening
+    entrypoint: ["node", "--import", "tsx", "src/cli/restore.ts"]
+    environment:
+      <<: *app-env
+      # Restore may target a brand-new volume; restoreBackup writes the marker itself.
+      JONATHON_REQUIRE_EXISTING_DATA: "false"
+    volumes:
+      - *data-volume
+      - type: bind
+        source: ${JONATHON_HOST_BACKUP_DIR:-./docker/backups}
+        target: /backups
+        read_only: true
+    network_mode: none
+
+volumes:
+  jonathon-data:
+    name: ${JONATHON_DOCKER_VOLUME:-jonathon-data}
+  agy-home:
+    name: ${JONATHON_DOCKER_AGY_VOLUME:-jonathon-agy-home}

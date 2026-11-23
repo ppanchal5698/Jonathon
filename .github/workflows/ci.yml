@@ -4,9 +4,18 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Lint, typecheck and the unit/integration suite on Linux and on Windows (the primary development OS).
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,6 +24,61 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm format:check
       - run: pnpm typecheck
       - run: pnpm test
       # Live Antigravity tests need a signed-in agy and are never run in CI.
+  # Browser test: real API, worker and UI, with the fixture CLI instead of agy (no network, no model).
+  e2e:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: test-results/
+          retention-days: 7
+
+  # Images for both architectures (the worker build verifies the pinned agy SHA-512 for each), then a demo-mode
+  # Compose stack on amd64 checked end to end through its published loopback ports.
+  docker:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build server, worker and web for amd64 and arm64
+        run: |
+          for target in server worker web; do
+            docker buildx build --platform linux/amd64,linux/arm64 --target "$target" .
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Compose stack (demo mode) and smoke test
+        env:
+          JONATHON_SMOKE_PASSWORD: ci-smoke-password-not-secret
+        run: |
+          cp docker/compose.env.example docker/compose.env
+          sed -i 's/^JONATHON_INIT_NEW_DATA_DIR=false/JONATHON_INIT_NEW_DATA_DIR=true/' docker/compose.env
+          docker compose --env-file docker/compose.env up -d --build
+          for i in $(seq 1 100); do
+            docker compose --env-file docker/compose.env ps --format '{{.Service}}={{.Health}}' | tr '\n' ' ' | grep -q 'web=healthy' && break
+            sleep 3
+          done
+          docker compose --env-file docker/compose.env ps
+          pnpm tsx scripts/docker-smoke.ts --ui http://localhost:3005 --mcp http://127.0.0.1:4100 --user ci-admin
+      - if: always()
+        run: docker compose --env-file docker/compose.env logs --no-color | tail -n 300

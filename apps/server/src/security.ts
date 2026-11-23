@@ -23,6 +23,9 @@ export function allowedHosts(port: number, webOrigins: string[]): Set<string> {
   return hosts;
 }
 
+/** Google redirects the browser here (a cross-site top-level GET); it is protected by state + PKCE + the binder cookie. */
+export const GOOGLE_CALLBACK_PATH = "/api/v1/auth/google/callback";
+
 export function checkHostAndOrigin(req: FastifyRequest, hosts: Set<string>, origins: Set<string>): void {
   const host = (req.headers.host ?? "").toLowerCase();
   if (!hosts.has(host)) throw new AppError("FORBIDDEN", "invalid Host header");
@@ -31,7 +34,8 @@ export function checkHostAndOrigin(req: FastifyRequest, hosts: Set<string>, orig
   if (origin && origin !== "null" && !origins.has(origin)) throw new AppError("FORBIDDEN", "cross-origin request rejected");
   if (origin === "null") throw new AppError("FORBIDDEN", "opaque origin rejected");
   const site = req.headers["sec-fetch-site"];
-  if (site === "cross-site") throw new AppError("FORBIDDEN", "cross-site request rejected");
+  const googleReturn = req.method === "GET" && req.url.split("?")[0] === GOOGLE_CALLBACK_PATH;
+  if (site === "cross-site" && !googleReturn) throw new AppError("FORBIDDEN", "cross-site request rejected");
 }
 
 export function readCookie(req: FastifyRequest, name: string): string | undefined {
@@ -40,7 +44,12 @@ export function readCookie(req: FastifyRequest, name: string): string | undefine
   for (const part of raw.split(";")) {
     const i = part.indexOf("=");
     if (i === -1) continue;
-    if (part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+    if (part.slice(0, i).trim() !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(i + 1).trim());
+    } catch {
+      return undefined; // malformed %-escape: treat as no cookie (401), never a 500
+    }
   }
   return undefined;
 }

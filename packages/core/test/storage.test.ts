@@ -1,21 +1,29 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  assertSafeSegment,
-  parseEntity,
-  resolveInside,
-  sanitizeDisplayName,
-  semanticHash,
-  serializeEntity,
-  sha256,
-  writeFileAtomic,
-} from "@jonathon/core";
+import { assertSafeSegment, parseEntity, resolveInside, sanitizeDisplayName, semanticHash, serializeEntity, sha256, writeFileAtomic } from "@jonathon/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeApp, SYSTEM, type TestApp, tempDir, USER } from "./helpers";
 
 describe("path safety", () => {
   it("rejects traversal, encoded traversal, absolute paths, separators and reserved names", () => {
-    for (const bad of ["..", "../x", "a/b", "a\\b", "%2e%2e", "..%2f", "C:", "C:\\x", "/etc/passwd", ".hidden", "con", "NUL.txt", "a:b", "x\u0000y", "trailing.", ""]) {
+    for (const bad of [
+      "..",
+      "../x",
+      "a/b",
+      "a\\b",
+      "%2e%2e",
+      "..%2f",
+      "C:",
+      "C:\\x",
+      "/etc/passwd",
+      ".hidden",
+      "con",
+      "NUL.txt",
+      "a:b",
+      "x\u0000y",
+      "trailing.",
+      "",
+    ]) {
       expect(() => assertSafeSegment(bad), bad).toThrow();
     }
     for (const ok of ["prj_0123456789abcdefghjkmnpqrs", "REQ-001.md", "original.pdf", "r12.md"]) expect(assertSafeSegment(ok)).toBe(ok);
@@ -98,7 +106,9 @@ describe("knowledge store", () => {
 
   it("approval requires a human, a typed confirmation and binds to content", () => {
     const { pid } = setup();
-    expect(() => t.app.knowledge.transition(SYSTEM, pid, "REQ-001", { to: "approved", expected_revision: 1, confirmation: "approve REQ-001" })).toThrow(/human/);
+    expect(() => t.app.knowledge.transition(SYSTEM, pid, "REQ-001", { to: "approved", expected_revision: 1, confirmation: "approve REQ-001" })).toThrow(
+      /human/,
+    );
     const mcp = { kind: "mcp_token" as const, tokenId: "tok_x", name: "claude", projectIds: [pid], scopes: ["read" as const, "propose" as const] };
     expect(() => t.app.knowledge.transition(mcp, pid, "REQ-001", { to: "approved", expected_revision: 1, confirmation: "approve REQ-001" })).toThrow();
     expect(() => t.app.knowledge.transition(USER, pid, "REQ-001", { to: "approved", expected_revision: 1 })).toThrow(/approve REQ-001/);
@@ -114,15 +124,24 @@ describe("knowledge store", () => {
       title: "Email must be verified",
       sections: { acceptance_criteria: [{ text: "AI idea", basis: "ai_inferred", review_state: "proposed" }] },
     });
-    expect(() => t.app.knowledge.transition(USER, pid, "REQ-001", { to: "approved", expected_revision: 2, confirmation: "approve REQ-001" })).toThrow(/AI-proposed/);
+    expect(() => t.app.knowledge.transition(USER, pid, "REQ-001", { to: "approved", expected_revision: 2, confirmation: "approve REQ-001" })).toThrow(
+      /AI-proposed/,
+    );
     t.app.knowledge.acceptProposedStatements(USER, pid, "REQ-001", 2);
-    expect(t.app.knowledge.transition(USER, pid, "REQ-001", { to: "approved", expected_revision: 3, confirmation: "approve REQ-001" }).approval_valid).toBe(true);
+    expect(t.app.knowledge.transition(USER, pid, "REQ-001", { to: "approved", expected_revision: 3, confirmation: "approve REQ-001" }).approval_valid).toBe(
+      true,
+    );
   });
 
   it("a manually typed 'status: approved' is not an approval", () => {
     const { pid } = setup();
     const path = join(t.dataDir, "projects", pid, "requirements", "REQ-001.md");
-    writeFileSync(path, readFileSync(path, "utf8").replace('status: "draft"', 'status: "approved"').replace("approval_event_id: null", 'approval_event_id: "apv_forged0000000000000000000"'));
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8")
+        .replace('status: "draft"', 'status: "approved"')
+        .replace("approval_event_id: null", 'approval_event_id: "apv_forged0000000000000000000"'),
+    );
     const report = t.app.ops.reconcile(USER, pid)[0]!;
     expect(report.external_edits[0]?.human_id).toBe("REQ-001");
     const e = t.app.knowledge.get(USER, pid, "REQ-001");
@@ -161,7 +180,15 @@ describe("knowledge store", () => {
     mkdirSync(join(t.dataDir, "staging", "intents"), { recursive: true });
     writeFileSync(
       join(t.dataDir, "staging", "intents", "int_test.json"),
-      JSON.stringify({ id: "int_test", project_id: pid, entity_id: doc.id, human_id: "REQ-001", entity_type: "requirement", file_hash: sha256(text), at: new Date(Date.now() - 60_000).toISOString() }),
+      JSON.stringify({
+        id: "int_test",
+        project_id: pid,
+        entity_id: doc.id,
+        human_id: "REQ-001",
+        entity_type: "requirement",
+        file_hash: sha256(text),
+        at: new Date(Date.now() - 60_000).toISOString(),
+      }),
     );
     const report = t.app.ops.reconcile(USER, pid)[0]!;
     expect(report.intents_completed).toEqual(["REQ-001"]);

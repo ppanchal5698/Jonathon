@@ -1,8 +1,8 @@
 # ADR 0002: Jonathon-owned storage and tool-free runtime isolation
 
-* Status: accepted. Supersedes the storage parts of ADR 0001 (sections 3 and 4), and the runtime flags in section 5.
-* Date: 16 Nov 2026
-* Decider: Parth (storage ownership, from the product brief), implementation agent (details)
+- Status: accepted. Supersedes the storage parts of ADR 0001 (sections 3 and 4), and the runtime flags in section 5.
+- Date: 16 Nov 2026
+- Decider: Parth (storage ownership, from the product brief), implementation agent (details)
 
 ## Context
 
@@ -13,16 +13,16 @@ controls that are better than the 1.2.4 stream guard: session-only `--settings`,
 
 ## Decision 1: filesystem knowledge store plus SQLite
 
-* The data root is configurable (`JONATHON_DATA_DIR`). It defaults to `%LOCALAPPDATA%\Jonathon` on Windows and
+- The data root is configurable (`JONATHON_DATA_DIR`). It defaults to `%LOCALAPPDATA%\Jonathon` on Windows and
   `~/.local/share/jonathon` elsewhere, which keeps it outside the source repository. It is never served statically.
-* **Filesystem is authoritative** for project manifests (`project.md`), immutable source revisions
+- **Filesystem is authoritative** for project manifests (`project.md`), immutable source revisions
   (`sources/<source>/<revision>/original.<ext>` + `metadata.json`), extraction artifacts
   (`extracted/<source>/<revision>.md` + `.locators.json`), requirements, decisions, open questions, conflicts,
   change proposals, specification snapshots and per-entity revision history (`history/<HUMAN-ID>/r<n>.md`).
-* **SQLite is authoritative** for users, sessions, MCP token hashes and scopes, conversations, messages, runtime
+- **SQLite is authoritative** for users, sessions, MCP token hashes and scopes, conversations, messages, runtime
   conversation mappings, jobs and leases, audit events and **approval events**.
-* **SQLite projections are rebuildable** from files: `knowledge_entities`, `sources`/`source_revisions` metadata, `chunks` and FTS.
-* Knowledge files are portable Markdown with conservative YAML frontmatter. Metadata (id, project_id, entity_type, schema_version,
+- **SQLite projections are rebuildable** from files: `knowledge_entities`, `sources`/`source_revisions` metadata, `chunks` and FTS.
+- Knowledge files are portable Markdown with conservative YAML frontmatter. Metadata (id, project_id, entity_type, schema_version,
   revision, status, created_at, updated_at, source_refs, supersedes, approval_event_id, ...) lives in frontmatter.
   Content lives in fixed `## Section` headings, so Obsidian or any editor can edit it.
 
@@ -58,11 +58,11 @@ reconciliation handles them.
 Reconciliation (startup, the Operations screen, or `POST /api/v1/ops/reconcile`) compares each file's hash with the
 recorded one:
 
-* Draft or in-review entity: the edit is imported as a new revision, with the same status and origin `external_edit`.
-* Approved entity: the edit is imported as a new revision with `status: in_review` and no approval. The old approval stays
+- Draft or in-review entity: the edit is imported as a new revision, with the same status and origin `external_edit`.
+- Approved entity: the edit is imported as a new revision with `status: in_review` and no approval. The old approval stays
   attached to the old revision in history. Specifications derived from it are flagged stale.
-* Deleted file: the projection is marked `missing` and surfaced in Operations. Nothing is silently deleted.
-* Parse failure: the file is left untouched and reported. The last good projection is kept and marked `invalid_file`.
+- Deleted file: the projection is marked `missing` and surfaced in Operations. Nothing is silently deleted.
+- Parse failure: the file is left untouched and reported. The last good projection is kept and marked `invalid_file`.
 
 ## Decision 2: tool-free Antigravity runs
 
@@ -91,8 +91,8 @@ shares the same composition root. `packages/test-fixtures` holds the fictional d
 
 ## Consequences
 
-* Jonathon runs with no third-party knowledge application.
-* Backups must include **both** the data root's `projects/` tree and `jonathon.sqlite` (users, tokens, conversations,
+- Jonathon runs with no third-party knowledge application.
+- Backups must include **both** the data root's `projects/` tree and `jonathon.sqlite` (users, tokens, conversations,
   approvals and audit cannot be rebuilt from files). See `docs/operations.md`.
-* Losing SQLite but keeping files leaves all knowledge readable, but approvals become invalid (they show as
+- Losing SQLite but keeping files leaves all knowledge readable, but approvals become invalid (they show as
   `in_review`, with no approval event) until Parth re-approves them. This is deliberate.

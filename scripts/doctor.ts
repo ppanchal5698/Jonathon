@@ -6,7 +6,7 @@
  */
 import { accessSync, constants, existsSync, mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { AntigravityCliRuntime, defaultDataDir, findRepoRoot, loadConfig, loadDotEnv } from "@jonathon/core";
+import { AntigravityCliRuntime, defaultDataDir, findRepoRoot, loadConfig, loadDotEnv, VERIFIED_AGY_VERSIONS } from "@jonathon/core";
 
 type Status = "ok" | "warn" | "fail" | "skip";
 const results: { check: string; status: Status; detail: string }[] = [];
@@ -81,8 +81,17 @@ async function main() {
     if (inst.installed) {
       const caps = await rt.inspectCapabilities();
       add("Runtime flags", caps.compatible ? "ok" : "fail", caps.compatible ? "all required flags present" : `missing: ${caps.missing.join(", ")}`);
-      add("Global agy rule files", caps.globalRuleFiles.length ? "warn" : "ok", caps.globalRuleFiles.length ? `${caps.globalRuleFiles.join(", ")} load into every run` : "none found");
-      if (inst.version && inst.version !== "1.5.9") add("Runtime version", "warn", `verified against 1.5.9; installed ${inst.version}. Run pnpm test:live before relying on it.`);
+      add(
+        "Global agy rule files",
+        caps.globalRuleFiles.length ? "warn" : "ok",
+        caps.globalRuleFiles.length ? `${caps.globalRuleFiles.join(", ")} load into every run` : "none found",
+      );
+      if (inst.version && !(VERIFIED_AGY_VERSIONS as readonly string[]).includes(inst.version))
+        add(
+          "Runtime version",
+          "warn",
+          `verified against ${VERIFIED_AGY_VERSIONS.join(", ")}; installed ${inst.version}. Run pnpm test:live before relying on it.`,
+        );
       if (provider) {
         const a = await rt.checkAuthentication();
         add("Antigravity authentication", a.status === "authenticated" ? "ok" : a.status === "auth_required" ? "fail" : "warn", `${a.status}: ${a.detail}`);
@@ -93,7 +102,7 @@ async function main() {
   // Services
   for (const [name, url] of [
     ["API server", `http://127.0.0.1:${config.port}/api/v1/health`],
-    ["Web UI", "http://127.0.0.1:3000/login"],
+    ["Web UI", "http://127.0.0.1:3005/login"],
   ] as const) {
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(3_000) });

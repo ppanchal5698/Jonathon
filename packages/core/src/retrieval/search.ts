@@ -14,7 +14,12 @@ const ID_PATTERN = /\b(REQ|DEC|QUESTION|CONFLICT|CHANGE)-\d{3,6}\b/gi;
 
 /** Turn free text into a safe FTS5 query: quoted terms joined with OR. Never passes FTS syntax through. */
 export function ftsQuery(text: string): string | null {
-  const terms = (text.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? []).slice(0, 24);
+  const terms = (
+    text
+      .normalize("NFKC")
+      .toLowerCase()
+      .match(/[\p{L}\p{N}]{2,}/gu) ?? []
+  ).slice(0, 24);
   const uniq = [...new Set(terms)];
   if (uniq.length === 0) return null;
   return uniq.map((t) => `"${t.replace(/"/g, "")}"`).join(" OR ");
@@ -136,7 +141,12 @@ export function hitsById(db: Db, projectId: string, ids: string[]): Array<Search
   const out: Array<SearchHit & { text: string }> = [];
   for (const [, r] of chunksById(db, projectId, ids)) {
     if (r.kind === "evidence") {
-      const current = all<{ ok: number }>(db, "SELECT 1 AS ok FROM sources WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL", r.source_id, r.revision_id);
+      const current = all<{ ok: number }>(
+        db,
+        "SELECT 1 AS ok FROM sources WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL",
+        r.source_id,
+        r.revision_id,
+      );
       if (current.length === 0) continue;
     }
     out.push(toHit(r));

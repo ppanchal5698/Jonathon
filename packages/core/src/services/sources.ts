@@ -71,14 +71,22 @@ export class SourceService {
   ingest(
     principal: Principal,
     projectId: string,
-    input: { filename: string; bytes: Uint8Array; kind?: "file" | "pasted_text"; sourceId?: string; correlationId?: string },
+    input: {
+      filename: string;
+      bytes: Uint8Array;
+      kind?: "file" | "pasted_text";
+      sourceId?: string;
+      correlationId?: string;
+      /** Already-sanitized display name (folder import: the file's path relative to the imported folder). */
+      displayName?: string;
+    },
   ): IngestResult {
     requireProject(this.ctx, principal, projectId, "write");
     if (input.bytes.length === 0) throw new AppError("VALIDATION_FAILED", "the file is empty");
     if (input.bytes.length > this.ctx.config.maxUploadBytes) {
       throw new AppError("FILE_TOO_LARGE", `file exceeds ${Math.round(this.ctx.config.maxUploadBytes / 1048576)} MB`);
     }
-    const displayName = sanitizeDisplayName(input.filename);
+    const displayName = input.displayName ?? sanitizeDisplayName(input.filename);
     const extension = input.kind === "pasted_text" ? "md" : safeExtension(displayName);
     const hash = sha256(input.bytes);
 
@@ -318,7 +326,7 @@ export class SourceService {
     });
     if (outcome.status === "failed") throw new AppError("EXTRACTION_FAILED", outcome.warnings.join("; ") || "extraction failed");
 
-    // Step 12: queue AI interpretation only if Parth enabled AI processing for this project.
+    // Step 12: queue AI interpretation only if the owner enabled AI processing for this project.
     let interpretationJob: string | null = null;
     const project = one<{ ai_enabled: number }>(this.ctx.db, "SELECT ai_enabled FROM projects WHERE id = ?", rev.project_id);
     if (project?.ai_enabled === 1 && outcome.chunks.length > 0 && (outcome.status === "succeeded" || outcome.status === "partially_succeeded")) {

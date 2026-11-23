@@ -59,12 +59,7 @@ export class AuthService {
   /** Simple lockout: more than 10 failures in 15 minutes for a username → RATE_LIMITED. */
   async login(username: string, password: string): Promise<{ token: string; session: SessionInfo }> {
     const since = new Date(Date.now() - 15 * 60_000).toISOString();
-    const failures = one<{ n: number }>(
-      this.db,
-      "SELECT COUNT(*) AS n FROM login_attempts WHERE username = ? AND at > ? AND success = 0",
-      username,
-      since,
-    )!.n;
+    const failures = one<{ n: number }>(this.db, "SELECT COUNT(*) AS n FROM login_attempts WHERE username = ? AND at > ? AND success = 0", username, since)!.n;
     if (failures >= 10) throw new AppError("RATE_LIMITED", "too many failed sign-in attempts; wait 15 minutes");
     const user = one<{ id: string; username: string; password_hash: string }>(this.db, "SELECT * FROM users WHERE username = ?", username);
     // Verify against a dummy hash when the user does not exist to keep timing similar.
@@ -108,6 +103,28 @@ export class AuthService {
     }
     run(this.db, "UPDATE sessions SET last_seen_at = ? WHERE id = ?", nowIso(), row.id);
     return { sessionId: row.id, userId: row.user_id, username: row.username, csrfToken: row.csrf_token, expiresAt: row.expires_at };
+  }
+
+  /** Create a browser session for an already-verified user (Sign in with Google). Same token/CSRF scheme as login(). */
+  startSession(user: { id: string; username: string }, how: string): { token: string; session: SessionInfo } {
+    const token = randomToken(32);
+    const csrf = randomToken(24);
+    const now = nowIso();
+    const expiresAt = new Date(Date.now() + this.sessionTtlHours * 3_600_000).toISOString();
+    const sessionId = newId("ses");
+    run(
+      this.db,
+      "INSERT INTO sessions (id, user_id, token_hash, csrf_token, created_at, expires_at, last_seen_at) VALUES (?,?,?,?,?,?,?)",
+      sessionId,
+      user.id,
+      sha256(token),
+      csrf,
+      now,
+      expiresAt,
+      now,
+    );
+    audit(this.db, { principal: { kind: "user", userId: user.id, username: user.username }, action: "session.login", details: { via: how } });
+    return { token, session: { sessionId, userId: user.id, username: user.username, csrfToken: csrf, expiresAt } };
   }
 
   logout(sessionId: string): void {

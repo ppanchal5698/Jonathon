@@ -85,7 +85,10 @@ function boundingRange(ranges: string[]): string {
     for (let x = n; x > 0; x = Math.floor((x - 1) / 26)) s = String.fromCharCode(65 + ((x - 1) % 26)) + s;
     return s;
   };
-  let c1 = Infinity, r1 = Infinity, c2 = 0, r2 = 0;
+  let c1 = Infinity,
+    r1 = Infinity,
+    c2 = 0,
+    r2 = 0;
   for (const r of ranges) {
     const m = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(r);
     if (!m) return [...new Set(ranges)].join(", ");
@@ -108,7 +111,11 @@ export function textBlocks(text: string, markdown: boolean): Block[] {
   let paraStart = 1;
   const flush = (endLine: number) => {
     if (para.join("").trim()) {
-      blocks.push({ heading: headingPath.length ? headingPath.join(" > ") : null, locator: { line: paraStart, line_end_hint: endLine }, text: para.join("\n") });
+      blocks.push({
+        heading: headingPath.length ? headingPath.join(" > ") : null,
+        locator: { line: paraStart, line_end_hint: endLine },
+        text: para.join("\n"),
+      });
     }
     para = [];
   };

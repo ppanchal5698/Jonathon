@@ -88,7 +88,13 @@ export class KnowledgeService {
   }
 
   /** Line diff between two stored revisions (both read from history files). */
-  diff(principal: Principal, projectId: string, humanId: string, from: number, to: number): { from: number; to: number; lines: { op: " " | "+" | "-"; text: string }[] } {
+  diff(
+    principal: Principal,
+    projectId: string,
+    humanId: string,
+    from: number,
+    to: number,
+  ): { from: number; to: number; lines: { op: " " | "+" | "-"; text: string }[] } {
     requireProject(this.ctx, principal, projectId, "read");
     const a = this.ctx.store.readHistoryRaw(projectId, humanId, from);
     const b = this.ctx.store.readHistoryRaw(projectId, humanId, to);
@@ -268,7 +274,12 @@ export class KnowledgeService {
    * - open question / conflict: confirm it is real (fields.reviewed = true); it stays open until answered/resolved.
    * - change proposal: apply its structured edits to the requirement (which goes back to review) and mark it accepted.
    */
-  accept(principal: Principal, projectId: string, humanId: string, body: { expected_revision: number; confirmation: string; note?: string }): { entity: KnowledgeEntity; applied_to?: KnowledgeEntity } {
+  accept(
+    principal: Principal,
+    projectId: string,
+    humanId: string,
+    body: { expected_revision: number; confirmation: string; note?: string },
+  ): { entity: KnowledgeEntity; applied_to?: KnowledgeEntity } {
     const current = this.ctx.store.get(projectId, humanId);
     this.confirm(principal, projectId, KnowledgeService.reviewVerbs(current.entity_type).accept, current.human_id, body.confirmation);
     if (current.file_state !== "ok") throw new AppError("EXTERNAL_EDIT_PENDING", "reconcile external edits first");
@@ -340,7 +351,8 @@ export class KnowledgeService {
       if (structured) {
         const req = this.ctx.store.get(projectId, reqId);
         if (req.entity_type !== "requirement") throw new AppError("REQUIREMENT_NOT_FOUND", `${reqId} is not a requirement`);
-        if (["rejected", "superseded"].includes(req.status)) throw new AppError("INVALID_TRANSITION", `${req.human_id} is ${req.status}; reject this proposal instead`);
+        if (["rejected", "superseded"].includes(req.status))
+          throw new AppError("INVALID_TRANSITION", `${req.human_id} is ${req.status}; reject this proposal instead`);
         if (req.file_state !== "ok") throw new AppError("EXTERNAL_EDIT_PENDING", `reconcile external edits to ${req.human_id} first`);
         // Approving a requirement adds a revision without changing its content, so compare content, not revision numbers.
         const base = Number(current.fields.base_revision ?? 0);
@@ -348,9 +360,13 @@ export class KnowledgeService {
           const baseText = this.ctx.store.readHistoryRaw(projectId, req.human_id, base);
           const baseHash = baseText ? semanticHash(parseEntity(baseText)) : null;
           if (baseHash !== req.semantic_hash) {
-            throw new AppError("REVISION_CONFLICT", `${req.human_id} changed since this proposal was made (revision ${base} → ${req.revision}). Review it and reject or re-propose.`, {
-              details: { current_revision: req.revision },
-            });
+            throw new AppError(
+              "REVISION_CONFLICT",
+              `${req.human_id} changed since this proposal was made (revision ${base} → ${req.revision}). Review it and reject or re-propose.`,
+              {
+                details: { current_revision: req.revision },
+              },
+            );
           }
         }
         const wasApproved = req.approval_valid;
@@ -396,8 +412,15 @@ export class KnowledgeService {
   /** Reject a proposed item: requirement/decision → rejected, question → withdrawn, conflict → dismissed, proposal → rejected. */
   reject(principal: Principal, projectId: string, humanId: string, body: { expected_revision: number; confirmation: string; note?: string }): KnowledgeEntity {
     const current = this.ctx.store.get(projectId, humanId);
-    const to = { requirement: "rejected", decision: "rejected", open_question: "withdrawn", conflict: "dismissed", change_proposal: "rejected" }[current.entity_type];
-    return this.transition(principal, projectId, current.human_id, { to, expected_revision: body.expected_revision, confirmation: body.confirmation, note: body.note });
+    const to = { requirement: "rejected", decision: "rejected", open_question: "withdrawn", conflict: "dismissed", change_proposal: "rejected" }[
+      current.entity_type
+    ];
+    return this.transition(principal, projectId, current.human_id, {
+      to,
+      expected_revision: body.expected_revision,
+      confirmation: body.confirmation,
+      note: body.note,
+    });
   }
 
   /**
@@ -410,14 +433,21 @@ export class KnowledgeService {
     const wasApproved = current.approval_valid;
     this.ctx.store.writeTx(() => {
       // Flag answers/specs that relied on it while its projection row still exists (the query joins on it).
-      if (wasApproved || current.entity_type === "requirement" || current.entity_type === "decision") this.ctx.store.markDependentsStale(projectId, current.human_id);
+      if (wasApproved || current.entity_type === "requirement" || current.entity_type === "decision")
+        this.ctx.store.markDependentsStale(projectId, current.human_id);
       this.ctx.store.remove(projectId, current.human_id, body.expected_revision, { principal, details: { was_approved: wasApproved } });
       if (current.entity_type === "requirement") {
         for (const p of this.ctx.store.list(projectId, { types: ["change_proposal"], statuses: ["open"] })) {
           if (p.fields.requirement_id !== current.human_id) continue;
-          this.ctx.store.update(projectId, p.human_id, p.revision, (d) => {
-            d.status = "stale";
-          }, { principal, action: "entity.stale", details: { reason: `${current.human_id} was deleted` } });
+          this.ctx.store.update(
+            projectId,
+            p.human_id,
+            p.revision,
+            (d) => {
+              d.status = "stale";
+            },
+            { principal, action: "entity.stale", details: { reason: `${current.human_id} was deleted` } },
+          );
         }
       }
     });
@@ -565,7 +595,8 @@ export class KnowledgeService {
     if (prior) {
       const r = JSON.parse(prior.result) as { project_id: string; human_id: string; fingerprint: string };
       const fp = sha256(JSON.stringify([input.project_id, input.requirement_id, input.base_revision, input.proposed_change, input.rationale]));
-      if (r.project_id !== input.project_id || r.fingerprint !== fp) throw new AppError("VALIDATION_FAILED", "request_id was already used for a different proposal");
+      if (r.project_id !== input.project_id || r.fingerprint !== fp)
+        throw new AppError("VALIDATION_FAILED", "request_id was already used for a different proposal");
       return { proposal: this.ctx.store.get(r.project_id, r.human_id), idempotent_replay: true };
     }
     const req = this.ctx.store.get(input.project_id, input.requirement_id);
@@ -579,7 +610,12 @@ export class KnowledgeService {
     this.ctx.store.writeTx(() => {
       const doc = this.ctx.store.newDoc(input.project_id, "change_proposal", {
         title: `Change to ${req.human_id}: ${req.title}`.slice(0, 200),
-        fields: { requirement_id: req.human_id, base_revision: input.base_revision, proposed_by: actorLabel(principal), origin: principal.kind === "mcp_token" ? "mcp_proposed" : "human_authored" },
+        fields: {
+          requirement_id: req.human_id,
+          base_revision: input.base_revision,
+          proposed_by: actorLabel(principal),
+          origin: principal.kind === "mcp_token" ? "mcp_proposed" : "human_authored",
+        },
         sections: { proposed_change: input.proposed_change, rationale: input.rationale },
       });
       this.ctx.store.create(doc, { principal, action: "proposal.created", details: { requirement: req.human_id } });
@@ -632,8 +668,10 @@ export class KnowledgeService {
     if (approvedReqs.length === 0) reasons.push(`No approved requirements are in scope for "${feature}".`);
     for (const c of conflicts.filter((c) => c.fields.blocking)) reasons.push(`Blocking conflict ${c.human_id} is open: ${c.title}`);
     for (const q of questions.filter((q) => q.fields.blocking)) reasons.push(`Blocking question ${q.human_id} is open: ${q.title}`);
-    if (unapprovedReqs.length) reasons.push(`${unapprovedReqs.length} requirement(s) in scope are not approved: ${unapprovedReqs.map((r) => `${r.human_id} (${r.status})`).join(", ")}`);
-    if (unapprovedDecs.length) reasons.push(`${unapprovedDecs.length} decision(s) in scope are not approved: ${unapprovedDecs.map((d) => d.human_id).join(", ")}`);
+    if (unapprovedReqs.length)
+      reasons.push(`${unapprovedReqs.length} requirement(s) in scope are not approved: ${unapprovedReqs.map((r) => `${r.human_id} (${r.status})`).join(", ")}`);
+    if (unapprovedDecs.length)
+      reasons.push(`${unapprovedDecs.length} decision(s) in scope are not approved: ${unapprovedDecs.map((d) => d.human_id).join(", ")}`);
     const nonBlockingOpen = conflicts.filter((c) => !c.fields.blocking).length + questions.filter((q) => !q.fields.blocking).length;
     if (nonBlockingOpen) reasons.push(`${nonBlockingOpen} non-blocking open item(s) should be reviewed.`);
     const ready =
@@ -723,7 +761,11 @@ export function assertCanPropose(principal: Principal, projectId: string): void 
 }
 
 function renderEntity(e: KnowledgeEntity): string {
-  const lines = [`### ${e.human_id}: ${e.title}`, "", `Status: **${e.status}**${e.approval_valid ? ` (approved by ${e.approval?.approved_by}, revision ${e.revision})` : " (not approved)"}`];
+  const lines = [
+    `### ${e.human_id}: ${e.title}`,
+    "",
+    `Status: **${e.status}**${e.approval_valid ? ` (approved by ${e.approval?.approved_by}, revision ${e.revision})` : " (not approved)"}`,
+  ];
   for (const [k, v] of Object.entries(e.sections)) {
     if (k === "_extra" || !v || (Array.isArray(v) && v.length === 0) || v === "") continue;
     lines.push("", `**${k.replace(/_/g, " ")}**`);
@@ -731,10 +773,17 @@ function renderEntity(e: KnowledgeEntity): string {
     else
       for (const item of v as Array<string | Statement>) {
         if (typeof item === "string") lines.push(`- ${item}`);
-        else lines.push(`- ${item.text}${item.basis === "ai_inferred" ? " _(AI-inferred)_" : ""}${item.review_state === "proposed" ? " _(proposed, not reviewed)_" : ""}`);
+        else
+          lines.push(
+            `- ${item.text}${item.basis === "ai_inferred" ? " _(AI-inferred)_" : ""}${item.review_state === "proposed" ? " _(proposed, not reviewed)_" : ""}`,
+          );
       }
   }
-  if (e.source_refs.length) lines.push("", `Sources: ${e.source_refs.map((r) => `${r.source_id}@${r.revision_id}${Object.keys(r.locator).length ? ` ${JSON.stringify(r.locator)}` : ""}`).join("; ")}`);
+  if (e.source_refs.length)
+    lines.push(
+      "",
+      `Sources: ${e.source_refs.map((r) => `${r.source_id}@${r.revision_id}${Object.keys(r.locator).length ? ` ${JSON.stringify(r.locator)}` : ""}`).join("; ")}`,
+    );
   return lines.join("\n");
 }
 
@@ -772,7 +821,8 @@ export function lineDiff(a: string[], b: string[]): { op: " " | "+" | "-"; text:
   const n = a.length;
   const m = b.length;
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--) dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
   const out: { op: " " | "+" | "-"; text: string }[] = [];
   let i = 0;
   let j = 0;

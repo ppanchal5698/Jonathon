@@ -363,4 +363,91 @@ CREATE TABLE generated_documents (
 ) STRICT;
 `,
   },
+  {
+    // Additive only: one new column, one partial index, two new tables. No existing row is rewritten.
+    id: "003_queue_hardening",
+    sql: `
+-- [SQLITE] business-level deduplication: at most one ACTIVE job per operation key
+-- (e.g. extract_knowledge:<revision>:<config>). Finished jobs release the key so a deliberate re-run is allowed.
+ALTER TABLE jobs ADD COLUMN dedupe_key TEXT;
+CREATE UNIQUE INDEX jobs_dedupe_active ON jobs(dedupe_key) WHERE dedupe_key IS NOT NULL AND status IN ('queued','running','retrying');
+
+-- [SQLITE] durable dead-letter records: a job that exhausted its attempts or failed permanently.
+-- The job row keeps status 'failed'; this table is the documented equivalent of a 'dead_lettered' state
+-- (the jobs.status CHECK constraint cannot be altered without rebuilding the table).
+CREATE TABLE dead_letters (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL UNIQUE REFERENCES jobs(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  job_type TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('attempts_exhausted','permanent_error','lease_expired')),
+  error_code TEXT NOT NULL,
+  error_message TEXT NOT NULL,
+  attempts INTEGER NOT NULL,
+  attempt_history TEXT NOT NULL DEFAULT '[]',
+  dead_at TEXT NOT NULL,
+  replay_count INTEGER NOT NULL DEFAULT 0,
+  replayed_at TEXT,
+  replayed_by TEXT
+) STRICT;
+CREATE INDEX dead_letters_open ON dead_letters(replayed_at, dead_at);
+
+-- [SQLITE] HTTP Idempotency-Key records for retryable REST mutations (24 h).
+CREATE TABLE http_idempotency (
+  scope TEXT NOT NULL,
+  key TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('in_progress','completed')),
+  status_code INTEGER,
+  response TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (scope, key)
+) STRICT;
+CREATE INDEX http_idempotency_expiry ON http_idempotency(expires_at);
+`,
+  },
+  {
+    id: "004_runtime_auth",
+    sql: `
+-- [SQLITE] Google sign-in / sign-out requests for the agy CLI in the Docker worker. The API writes a request; the
+-- worker runs agy and reports back. code holds the pasted one-time authorization code only until the worker consumes
+-- it (then NULL); auth_url is Google's sign-in link, shown only to the signed-in person while the request waits.
+CREATE TABLE runtime_auth_requests (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL CHECK (action IN ('sign_in','sign_out','check')),
+  status TEXT NOT NULL CHECK (status IN ('pending','running','awaiting_code','verifying','succeeded','failed','cancelled','expired')),
+  auth_url TEXT,
+  code TEXT,
+  detail TEXT,
+  error_code TEXT,
+  requested_by_id TEXT NOT NULL,
+  requested_by_name TEXT NOT NULL,
+  worker_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT
+) STRICT;
+CREATE INDEX runtime_auth_open ON runtime_auth_requests(status, created_at);
+`,
+  },
+  {
+    id: "005_google_sign_in",
+    sql: `
+-- [SQLITE] Sign in with Google for the local account. google_sub binds the single account to one Google identity.
+ALTER TABLE users ADD COLUMN google_sub TEXT;
+ALTER TABLE users ADD COLUMN email TEXT;
+CREATE UNIQUE INDEX users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL;
+
+-- [SQLITE] In-flight Google sign-ins (10 minutes). binder_hash ties the callback to the browser that started it (cookie).
+CREATE TABLE oauth_states (
+  state TEXT PRIMARY KEY,
+  binder_hash TEXT NOT NULL,
+  code_verifier TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+) STRICT;
+`,
+  },
 ];

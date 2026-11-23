@@ -55,7 +55,9 @@ interface ChunkRow {
   content_hash: string;
 }
 
-const STOP = new Set("a an the and or of to for in on at by with from is are be must shall should can will that this it as their its user users system".split(" "));
+const STOP = new Set(
+  "a an the and or of to for in on at by with from is are be must shall should can will that this it as their its user users system".split(" "),
+);
 
 function tokens(s: string): Set<string> {
   return new Set(
@@ -322,12 +324,34 @@ export class ExtractionService {
         text: c.text,
       }));
       const existingReqs = reqs.length
-        ? reqs.map((r) => `${r.human_id} | ${fence(r.title)} | ${fence(String(r.sections.description ?? "").replace(/\s+/g, " ").slice(0, 240))}`).join("\n")
+        ? reqs
+            .map(
+              (r) =>
+                `${r.human_id} | ${fence(r.title)} | ${fence(
+                  String(r.sections.description ?? "")
+                    .replace(/\s+/g, " ")
+                    .slice(0, 240),
+                )}`,
+            )
+            .join("\n")
         : "none";
       if (team) {
         // Agent team: classifier (once per document) → specialists in parallel → draft verifier → code gate.
         classification ??= await this.classify(jc, projectId, project.name, batch, crew);
-        const out = await this.runCrew(jc, projectId, project.name, classification, batch, others, evidence, otherEvidence, reqs, existingReqs, otherTitles, crew);
+        const out = await this.runCrew(
+          jc,
+          projectId,
+          project.name,
+          classification,
+          batch,
+          others,
+          evidence,
+          otherEvidence,
+          reqs,
+          existingReqs,
+          otherTitles,
+          crew,
+        );
         rejected.push(...out.rejected);
         const r = this.persist(projectId, out.kept, batch, known, this.ctx.runtime.provider, others);
         created.push(...r.created);
@@ -360,14 +384,18 @@ export class ExtractionService {
         `<existing_questions_and_conflicts>\n${fence(otherTitles.slice(0, 60).join(" | ")) || "none"}\n</existing_questions_and_conflicts>`,
         "",
         renderEvidence(evidence),
-        ...(otherEvidence.length ? ["", "<!-- passages from other documents in this project, for conflict checks only -->", renderEvidence(otherEvidence)] : []),
+        ...(otherEvidence.length
+          ? ["", "<!-- passages from other documents in this project, for conflict checks only -->", renderEvidence(otherEvidence)]
+          : []),
       ].join("\n");
       const rt = await this.ctx.runtime.run({ projectId, prompt, schema: "extraction", signal: jc.signal, onProgress: (s) => jc.progress(s) });
       if (rt.completion === "permission_denied") throw new AppError("ANTIGRAVITY_PERMISSION_DENIED", "runtime attempted denied actions; extraction discarded");
       if (rt.completion === "cancelled") throw new AppError("JOB_CANCELLED", "cancelled");
-      if (rt.completion !== "success") throw new AppError("ANTIGRAVITY_UNAVAILABLE", `runtime returned ${rt.envelopeStatus ?? "an error"}`, { retryable: true });
+      if (rt.completion !== "success")
+        throw new AppError("ANTIGRAVITY_UNAVAILABLE", `runtime returned ${rt.envelopeStatus ?? "an error"}`, { retryable: true });
       const parsed = ModelExtractionSchema.safeParse(rt.structured);
-      if (!parsed.success) throw new AppError("INVALID_MODEL_OUTPUT", "extraction output did not match the schema", { details: parsed.error.issues.slice(0, 5) });
+      if (!parsed.success)
+        throw new AppError("INVALID_MODEL_OUTPUT", "extraction output did not match the schema", { details: parsed.error.issues.slice(0, 5) });
       warnings.push(...rt.warnings);
       const r = this.persist(projectId, parsed.data, batch, known, rt.provider, others);
       created.push(...r.created);
@@ -401,15 +429,25 @@ export class ExtractionService {
   /** Run one team agent and validate its output against its own schema. Any failure fails the job (retryable). */
   private async callAgent<T>(jc: JobContext, projectId: string, schema: SchemaName, parser: z.ZodType<T>, prompt: string, crew: CrewLog): Promise<T> {
     const started = Date.now();
-    const rt = await this.ctx.runtime.run({ projectId, prompt, schema, signal: jc.signal, onProgress: (s) => jc.progress(`${AGENT_LABEL[schema] ?? schema}: ${s}`) });
+    const rt = await this.ctx.runtime.run({
+      projectId,
+      prompt,
+      schema,
+      signal: jc.signal,
+      onProgress: (s) => jc.progress(`${AGENT_LABEL[schema] ?? schema}: ${s}`),
+    });
     const calls = crew.calls[schema] ?? { runs: 0, ms: 0 };
     crew.calls[schema] = { runs: calls.runs + 1, ms: calls.ms + (Date.now() - started) };
     if (rt.completion === "permission_denied") throw new AppError("ANTIGRAVITY_PERMISSION_DENIED", "runtime attempted denied actions; extraction discarded");
     if (rt.completion === "cancelled") throw new AppError("JOB_CANCELLED", "cancelled");
-    if (rt.completion !== "success") throw new AppError("ANTIGRAVITY_UNAVAILABLE", `${AGENT_LABEL[schema] ?? schema} returned ${rt.envelopeStatus ?? "an error"}`, { retryable: true });
+    if (rt.completion !== "success")
+      throw new AppError("ANTIGRAVITY_UNAVAILABLE", `${AGENT_LABEL[schema] ?? schema} returned ${rt.envelopeStatus ?? "an error"}`, { retryable: true });
     const parsed = parser.safeParse(rt.structured);
     if (!parsed.success) {
-      throw new AppError("INVALID_MODEL_OUTPUT", `${AGENT_LABEL[schema] ?? schema} output did not match its schema`, { details: parsed.error.issues.slice(0, 5), retryable: true });
+      throw new AppError("INVALID_MODEL_OUTPUT", `${AGENT_LABEL[schema] ?? schema} output did not match its schema`, {
+        details: parsed.error.issues.slice(0, 5),
+        retryable: true,
+      });
     }
     return parsed.data;
   }
@@ -488,7 +526,13 @@ export class ExtractionService {
     const reqText = new Map(
       reqs.map((r) => [
         r.human_id,
-        [r.title, String(r.sections.description ?? ""), ...Object.values(r.sections).flatMap((v) => (Array.isArray(v) ? (v as Array<string | Statement>).map((s) => (typeof s === "string" ? s : s.text)) : []))].join("\n"),
+        [
+          r.title,
+          String(r.sections.description ?? ""),
+          ...Object.values(r.sections).flatMap((v) =>
+            Array.isArray(v) ? (v as Array<string | Statement>).map((s) => (typeof s === "string" ? s : s.text)) : [],
+          ),
+        ].join("\n"),
       ]),
     );
     const textOf = (id: string): string | undefined => {
@@ -510,7 +554,9 @@ export class ExtractionService {
     const shown: PromptEvidence[] = [
       ...evidence.filter((e) => cited.has(e.id)),
       ...otherEvidence.filter((e) => cited.has(e.id)),
-      ...reqs.filter((r) => cited.has(r.human_id)).map((r) => ({ id: r.human_id, authority: "existing_requirement", title: r.title, locator: "", text: reqText.get(r.human_id) ?? "" })),
+      ...reqs
+        .filter((r) => cited.has(r.human_id))
+        .map((r) => ({ id: r.human_id, authority: "existing_requirement", title: r.title, locator: "", text: reqText.get(r.human_id) ?? "" })),
     ];
     const verdicts = await this.callAgent(
       jc,
@@ -597,7 +643,10 @@ export class ExtractionService {
     }
     // One focused search per technology/timeline topic the batch mentions (database, frontend, login, ...).
     for (const t of topics) collect([t], 3);
-    const top = [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_OTHER_PASSAGES).map(([id]) => id);
+    const top = [...score.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, MAX_OTHER_PASSAGES)
+      .map(([id]) => id);
     if (!top.length) return [];
     const rows = all<ChunkRow>(
       this.ctx.db,
@@ -648,9 +697,14 @@ export class ExtractionService {
     const created: string[] = [];
     const skipped: string[] = [];
     const reqTitles = new SeenTitles(known.filter((e) => e.entity_type === "requirement").map((e) => e.title));
-    const questionTitles = new SeenTitles(known.filter((e) => e.entity_type === "open_question").map((e) => e.title), similarQuestion);
+    const questionTitles = new SeenTitles(
+      known.filter((e) => e.entity_type === "open_question").map((e) => e.title),
+      similarQuestion,
+    );
     const conflictTitles = new SeenTitles(known.filter((e) => e.entity_type === "conflict").map((e) => e.title));
-    const liveReqs = new Map(known.filter((e) => e.entity_type === "requirement" && !["rejected", "superseded"].includes(e.status)).map((e) => [e.human_id, e]));
+    const liveReqs = new Map(
+      known.filter((e) => e.entity_type === "requirement" && !["rejected", "superseded"].includes(e.status)).map((e) => [e.human_id, e]),
+    );
 
     const createQuestion = (question: string, context: string, blocking: boolean, scope: string, refs: SourceRef[], related: string[]): string | null => {
       if (!questionTitles.add(question)) {
@@ -710,9 +764,15 @@ export class ExtractionService {
         if (qid) linked.push(`${qid}: ${q.trim()}`);
       }
       if (linked.length) {
-        this.ctx.store.update(projectId, doc.human_id, 1, (d) => {
-          d.sections.open_questions = linked;
-        }, { principal: system, action: "entity.updated", details: { origin, linked_questions: linked.length } });
+        this.ctx.store.update(
+          projectId,
+          doc.human_id,
+          1,
+          (d) => {
+            d.sections.open_questions = linked;
+          },
+          { principal: system, action: "entity.updated", details: { origin, linked_questions: linked.length } },
+        );
       }
     }
 
@@ -721,14 +781,20 @@ export class ExtractionService {
     }
 
     const thisDoc = batch[0]!.source_id;
-    const docName = (refs: SourceRef[]) => [...new Set([...batch, ...others].filter((ch) => refs.some((r) => r.chunk_id === ch.id)).map((ch) => ch.title))].join(", ");
+    const docName = (refs: SourceRef[]) =>
+      [...new Set([...batch, ...others].filter((ch) => refs.some((r) => r.chunk_id === ch.id)).map((ch) => ch.title))].join(", ");
     for (const c of x.conflicts) {
       // Each side may cite this document (E), another document (O, conflicts only) or an existing requirement.
       const side = (ids: string[], label: string, claim: string) => {
         const reqIds = ids.map((id) => id.trim().toUpperCase()).filter((id) => liveReqs.has(id));
         const refs = [
           ...this.refs(batch, ids, label, others, claim),
-          ...reqIds.flatMap((id) => liveReqs.get(id)!.source_refs.slice(0, 2).map((ref) => ({ ...ref, label }))),
+          ...reqIds.flatMap((id) =>
+            liveReqs
+              .get(id)!
+              .source_refs.slice(0, 2)
+              .map((ref) => ({ ...ref, label })),
+          ),
         ];
         return { refs, reqIds, claim };
       };

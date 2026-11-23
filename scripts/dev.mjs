@@ -4,11 +4,18 @@
 //   pnpm start        → production mode (run `pnpm build` first)
 import { spawn } from "node:child_process";
 
+// Local overrides (ports, origins) from <repo>/.env; values already in the environment win.
+try {
+  process.loadEnvFile(new URL("../.env", import.meta.url));
+} catch {
+  /* no .env */
+}
+
 const prod = process.argv.includes("--prod");
 const isWin = process.platform === "win32";
 const pnpm = isWin ? "pnpm.cmd" : "pnpm";
 
-const WEB_PORT = /^\d{2,5}$/.test(process.env.JONATHON_WEB_PORT ?? "") ? process.env.JONATHON_WEB_PORT : "3000";
+const WEB_PORT = /^\d{2,5}$/.test(process.env.JONATHON_WEB_PORT ?? "") ? process.env.JONATHON_WEB_PORT : "3005";
 const API_PORT = /^\d{2,5}$/.test(process.env.JONATHON_PORT ?? "") ? process.env.JONATHON_PORT : "4100";
 
 const procs = [

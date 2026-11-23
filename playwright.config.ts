@@ -34,7 +34,11 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   // Uses the system Microsoft Edge on Windows so no browser download is needed; override with PW_CHANNEL.
-  use: { baseURL: `http://127.0.0.1:${WEB_PORT}`, trace: "retain-on-failure", channel: process.env.PW_CHANNEL ?? (process.platform === "win32" ? "msedge" : undefined) },
+  use: {
+    baseURL: `http://127.0.0.1:${WEB_PORT}`,
+    trace: "retain-on-failure",
+    channel: process.env.PW_CHANNEL ?? (process.platform === "win32" ? "msedge" : undefined),
+  },
   webServer: [
     { command: "pnpm --filter @jonathon/server start", url: `http://127.0.0.1:${API_PORT}/api/v1/health`, env, reuseExistingServer: false, timeout: 60_000 },
     { command: "pnpm --filter @jonathon/server start:worker", env, reuseExistingServer: false, timeout: 60_000, wait: { stdout: /worker started/ } },

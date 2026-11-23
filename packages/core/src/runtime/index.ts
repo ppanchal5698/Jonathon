@@ -5,3 +5,4 @@ export * from "./policy";
 export * from "./process-tree";
 export * from "./prompt-format";
 export * from "./types";
+export * from "./agy-auth";

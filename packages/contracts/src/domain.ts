@@ -78,7 +78,7 @@ export const JobStatusSchema = z.enum(JOB_STATUSES);
 export type JobStatus = z.infer<typeof JobStatusSchema>;
 export const TERMINAL_JOB_STATUSES: readonly JobStatus[] = ["succeeded", "partially_succeeded", "failed", "cancelled", "unsupported", "needs_ocr"];
 
-export const JOB_TYPES = ["ingest", "answer", "extract_knowledge", "reindex", "reconcile", "graph_extract", "generate_documents"] as const;
+export const JOB_TYPES = ["ingest", "answer", "extract_knowledge", "reindex", "reconcile", "graph_extract", "generate_documents", "import_folder"] as const;
 export const JobTypeSchema = z.enum(JOB_TYPES);
 export type JobType = z.infer<typeof JobTypeSchema>;
 

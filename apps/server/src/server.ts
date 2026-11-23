@@ -6,13 +6,17 @@ import {
   CreateEntityBodySchema,
   CreateMcpTokenBodySchema,
   CreateProjectBodySchema,
+  DeleteProjectBodySchema,
   DeleteSourceBodySchema,
   DocReviewBodySchema,
   DocSectionUpdateBodySchema,
   EditDocSectionBodySchema,
+  FolderImportBodySchema,
+  FolderScanBodySchema,
   type EntityType,
   EntityTypeSchema,
   ERROR_HTTP_STATUS,
+  JobStatusSchema,
   GenerateDocumentsBodySchema,
   LoginBodySchema,
   PasteTextBodySchema,
@@ -28,6 +32,7 @@ import { AppError, createMcpServer, type JonathonApp, requireProject, toAppError
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
+import { beginIdempotent, finishIdempotent } from "./idempotency";
 import { allowedHosts, checkHostAndOrigin, clearSessionCookie, readCookie, requireUser, SESSION_COOKIE, securityHeaders, sessionCookie } from "./security";
 
 const ok = <T>(data: T) => ({ data });
@@ -44,23 +49,45 @@ function parse<T extends z.ZodType>(schema: T, value: unknown): z.infer<T> {
 
 type P = { pid: string };
 
-export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
+/**
+ * "all": REST + MCP on one listener (native default). "api": REST only. "mcp": MCP plus health/readiness only; this is
+ * the listener Docker publishes for Claude Code, so /api/v1 is not reachable from the host at all.
+ */
+export type Surface = "all" | "api" | "mcp";
+const MCP_SURFACE_PATHS = new Set(["/mcp", "/api/v1/health", "/api/v1/ready"]);
+
+export async function buildServer(app: JonathonApp, opts: { surface?: Surface; port?: number } = {}): Promise<FastifyInstance> {
+  const surface = opts.surface ?? "all";
   const { config, log } = app.ctx;
-  const hosts = allowedHosts(config.port, config.webOrigins);
+  const hosts = allowedHosts(opts.port ?? config.port, config.webOrigins);
+  // Container deployments: the web container's proxy reaches the API by service name (e.g. server:4100).
+  for (const h of config.allowedHosts) hosts.add(h);
   const origins = new Set(config.webOrigins);
 
   const f = Fastify({
     loggerInstance: log.child({ component: "http" }) as unknown as FastifyBaseLogger,
     genReqId: () => `req_${randomUUID().slice(0, 12)}`,
     bodyLimit: 4 * 1024 * 1024,
+    // Never trust X-Forwarded-*: nothing in Jonathon's security decisions uses the client IP, and the only proxy (the
+    // Next.js frontend) is reached over an internal network. Origin, Host, session and CSRF checks use the real headers.
     trustProxy: false,
   });
   await f.register(multipart, { limits: { fileSize: config.maxUploadBytes, files: 20, fields: 10, parts: 30 } });
 
   f.addHook("onRequest", async (req, reply) => {
+    const path = req.url.split("?")[0]!;
+    const wrongSurface = (surface === "mcp" && !MCP_SURFACE_PATHS.has(path)) || (surface === "api" && path === "/mcp");
+    if (wrongSurface) {
+      securityHeaders(reply);
+      return reply.status(404).send({ error: { code: "NOT_FOUND", message: "not found on this listener", correlation_id: req.id } });
+    }
     reply.header("X-Correlation-Id", req.id);
     securityHeaders(reply);
     checkHostAndOrigin(req, hosts, origins);
+  });
+  f.addHook("onSend", async (req, reply, payload) => {
+    finishIdempotent(app, req, reply, payload);
+    return payload;
   });
 
   f.setErrorHandler((err, req, reply) => {
@@ -84,10 +111,18 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
 
   // ---------- public ----------
   f.get("/api/v1/health", async () => ok({ status: "ok" }));
+  // Readiness (container health checks): the database answers and the data directory is writable. No paths or details.
+  f.get("/api/v1/ready", async (_req, reply) => {
+    const r = app.ops.readiness();
+    if (!r.ready) reply.status(503);
+    return ok(r);
+  });
   f.get("/api/v1/setup/status", async (req) =>
     ok({
       set_up: app.auth.isSetUp(),
       mode: config.mode,
+      // "google": Sign in with Google is the only way in (no username/password).
+      auth: app.google.enabled ? "google" : "password",
       // The absolute data path is shown only before setup or to the signed-in user.
       data_dir: !app.auth.isSetUp() || app.auth.resolveSession(readCookie(req, SESSION_COOKIE)) ? config.dataDir : null,
       ai_notice:
@@ -95,7 +130,47 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     }),
   );
 
+  const passwordClosed = () => {
+    if (app.google.enabled) throw new AppError("FORBIDDEN", "this Jonathon uses Sign in with Google; passwords are turned off");
+  };
+
+  // ----- Sign in with Google (OpenID Connect). Start: same-origin navigation from the sign-in page. -----
+  const OAUTH_COOKIE = "jon_oauth";
+  const oauthCookie = (value: string, maxAge: number) =>
+    // Path=/ so the cookie also reaches a redirect URI outside /api/v1 (e.g. /oauth2callback on the UI origin).
+    `${OAUTH_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+  /** A tiny same-origin page that moves the browser on. A server redirect would keep the navigation "cross-site"
+   *  (it started at Google), and browsers then withhold the SameSite=Strict session cookie on the next page. */
+  const continuePage = (reply: FastifyReply, to: string) => {
+    reply.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+    reply.header("Content-Type", "text/html; charset=utf-8");
+    const href = to.replace(/[^\w\-./?=&%]/g, "");
+    return reply.send(
+      `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${href}"><title>Jonathon</title></head>` +
+        `<body><p>Continuing to <a href="${href}">Jonathon</a>…</p></body></html>`,
+    );
+  };
+  f.get("/api/v1/auth/google/start", async (_req, reply) => {
+    const { url, binder } = app.google.start();
+    reply.header("Set-Cookie", oauthCookie(binder, 600));
+    return reply.redirect(url, 302);
+  });
+  f.get<{ Querystring: { state?: string; code?: string; error?: string } }>("/api/v1/auth/google/callback", async (req, reply) => {
+    try {
+      const { token, created } = await app.google.callback(req.query, readCookie(req, OAUTH_COOKIE));
+      reply.header("Set-Cookie", [sessionCookie(token, config.sessionTtlHours * 3600), oauthCookie("", 0)]);
+      return continuePage(reply, created ? "/setup" : "/");
+    } catch (e) {
+      const err = toAppError(e);
+      req.log.info({ code: err.code }, "google sign-in failed");
+      reply.header("Set-Cookie", oauthCookie("", 0));
+      const msg = err.code === "INTERNAL" ? "sign-in failed" : err.message;
+      return continuePage(reply, `/login?error=${encodeURIComponent(msg.slice(0, 200))}`);
+    }
+  });
+
   f.post("/api/v1/setup/account", async (req, reply) => {
+    passwordClosed();
     const body = parse(SetupAccountBodySchema, req.body);
     await app.auth.createAccount(body.username, body.password);
     const { token, session } = await app.auth.login(body.username, body.password);
@@ -104,6 +179,7 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   });
 
   f.post("/api/v1/auth/login", async (req, reply) => {
+    passwordClosed();
     const body = parse(LoginBodySchema, req.body);
     if (!app.auth.isSetUp()) throw new AppError("SETUP_REQUIRED", "create the local account first");
     const { token, session } = await app.auth.login(body.username, body.password);
@@ -127,7 +203,10 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   });
 
   // ---------- authenticated (cookie) ----------
-  const authed = async (req: FastifyRequest) => requireUser(app, req);
+  const authed = async (req: FastifyRequest, reply: FastifyReply) => {
+    requireUser(app, req);
+    return beginIdempotent(app, req, reply);
+  };
 
   f.get("/api/v1/projects", { preHandler: authed }, async (req) => ok(app.projects.list(req.principal!)));
   f.post("/api/v1/projects", { preHandler: authed }, async (req) => ok(app.projects.create(req.principal!, parse(CreateProjectBodySchema, req.body))));
@@ -153,6 +232,10 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   f.patch<{ Params: P }>("/api/v1/projects/:pid", { preHandler: authed }, async (req) =>
     ok(app.projects.update(req.principal!, req.params.pid, parse(UpdateProjectBodySchema, req.body))),
   );
+  // Permanent: the whole project, its files and its rows (ProjectService.delete). Session + CSRF + typed phrase.
+  f.delete<{ Params: P }>("/api/v1/projects/:pid", { preHandler: authed }, async (req) =>
+    ok(app.projects.delete(req.principal!, req.params.pid, parse(DeleteProjectBodySchema, req.body).confirmation)),
+  );
   f.get<{ Params: P }>("/api/v1/projects/:pid/activity", { preHandler: authed }, async (req) => ok(app.projects.activity(req.principal!, req.params.pid)));
   f.get("/api/v1/activity", { preHandler: authed }, async (req) => ok(app.projects.activity(req.principal!, null, 30)));
 
@@ -175,6 +258,13 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     if (results.length === 0) throw new AppError("VALIDATION_FAILED", "no files were uploaded");
     return ok(results);
   });
+  // Folder import: scan shows what would be imported; import queues a background job. Human session only.
+  f.post<{ Params: P }>("/api/v1/projects/:pid/sources/folder/scan", { preHandler: authed }, async (req) =>
+    ok(await app.folders.scan(req.principal!, req.params.pid, parse(FolderScanBodySchema, req.body))),
+  );
+  f.post<{ Params: P }>("/api/v1/projects/:pid/sources/folder/import", { preHandler: authed }, async (req) =>
+    ok(await app.folders.queueImport(req.principal!, req.params.pid, parse(FolderImportBodySchema, req.body))),
+  );
   f.post<{ Params: P }>("/api/v1/projects/:pid/sources/paste", { preHandler: authed }, async (req) => {
     const b = parse(PasteTextBodySchema, req.body);
     return ok(
@@ -213,6 +303,8 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
         type: "extract_knowledge",
         payload: { revision_id: req.params.rid },
         serialKey: `extract:${p.id}`,
+        // A second click while the same draft extraction is still queued or running returns that job.
+        dedupeKey: `extract_knowledge:${req.params.rid}:${app.ctx.runtime.provider}`,
         createdBy: req.principal!.kind === "user" ? req.principal!.username : "user",
         correlationId: req.id,
       }),
@@ -366,7 +458,7 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     return ok(app.ctx.queue.list({ projectId: req.params.pid, limit: 100 }));
   });
   f.get<{ Querystring: { status?: string } }>("/api/v1/jobs", { preHandler: authed }, async (req) =>
-    ok(app.ctx.queue.list({ statuses: req.query.status ? (req.query.status.split(",") as never) : undefined, limit: 200 })),
+    ok(app.ctx.queue.list({ statuses: req.query.status ? parse(z.array(JobStatusSchema).max(10), req.query.status.split(",")) : undefined, limit: 200 })),
   );
   f.get<{ Params: P & { jid: string } }>("/api/v1/projects/:pid/jobs/:jid", { preHandler: authed }, async (req) => {
     try {
@@ -383,18 +475,36 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
     app.ctx.queue.getForProject(req.params.pid, req.params.jid);
     return ok(app.ctx.queue.requestCancel(req.params.jid));
   });
+  // Retry and replay share one path: human only, audited (job.replayed), safe to repeat.
   f.post<{ Params: P & { jid: string } }>("/api/v1/projects/:pid/jobs/:jid/retry", { preHandler: authed }, async (req) => {
     requireProject(app.ctx, req.principal!, req.params.pid, "write");
-    app.ctx.queue.getForProject(req.params.pid, req.params.jid);
-    return ok(app.ctx.queue.retry(req.params.jid));
+    return ok(app.ctx.queue.retry(req.principal!, req.params.jid, { projectId: req.params.pid, correlationId: req.id }));
   });
+  f.post<{ Params: P & { jid: string } }>("/api/v1/projects/:pid/jobs/:jid/replay", { preHandler: authed }, async (req) => {
+    requireProject(app.ctx, req.principal!, req.params.pid, "write");
+    return ok(app.ctx.queue.replay(req.principal!, req.params.jid, { projectId: req.params.pid, correlationId: req.id }));
+  });
+  f.get<{ Querystring: { project_id?: string; include_replayed?: string; limit?: string } }>(
+    "/api/v1/ops/dead-letters",
+    { preHandler: authed },
+    async (req) => {
+      if (req.query.project_id) requireProject(app.ctx, req.principal!, req.query.project_id, "read");
+      return ok(
+        app.ctx.queue.listDeadLetters({
+          projectId: req.query.project_id,
+          includeReplayed: req.query.include_replayed === "1",
+          limit: parse(z.coerce.number().int().min(1).max(500).default(100), req.query.limit),
+        }),
+      );
+    },
+  );
 
   // ----- MCP credentials -----
   f.get("/api/v1/mcp/tokens", { preHandler: authed }, async () => ok(app.auth.listMcpTokens()));
   f.post("/api/v1/mcp/tokens", { preHandler: authed }, async (req) => {
     const b = parse(CreateMcpTokenBodySchema, req.body);
     const t = app.auth.createMcpToken(req.principal!, { name: b.name, projectIds: b.project_ids, scopes: b.scopes, expiresInDays: b.expires_in_days });
-    return ok({ ...t, mcp_url: `http://127.0.0.1:${config.port}/mcp`, shown_once: true });
+    return ok({ ...t, mcp_url: config.mcpPublicUrl, shown_once: true });
   });
   f.post<{ Params: { id: string } }>("/api/v1/mcp/tokens/:id/revoke", { preHandler: authed }, async (req) => {
     app.auth.revokeMcpToken(req.principal!, req.params.id);
@@ -402,14 +512,33 @@ export async function buildServer(app: JonathonApp): Promise<FastifyInstance> {
   });
   f.post<{ Params: { id: string } }>("/api/v1/mcp/tokens/:id/rotate", { preHandler: authed }, async (req) => {
     const t = app.auth.rotateMcpToken(req.principal!, req.params.id);
-    return ok({ ...t, mcp_url: `http://127.0.0.1:${config.port}/mcp`, shown_once: true });
+    return ok({ ...t, mcp_url: config.mcpPublicUrl, shown_once: true });
   });
   f.get<{ Params: { id: string } }>("/api/v1/mcp/tokens/:id/access", { preHandler: authed }, async (req) => ok(app.auth.mcpAccessLog(req.params.id)));
 
   // ----- operations -----
   f.get("/api/v1/ops/health", { preHandler: authed }, async () => ok(app.ops.health()));
   f.get<{ Querystring: { auth?: string } }>("/api/v1/ops/runtime", { preHandler: authed }, async (req) =>
-    ok(await app.ops.runtimeDiagnostics(req.query.auth === "1")),
+    // Docker: the API container has no agy; the worker answers (and runs the authentication check when asked).
+    ok(
+      config.runtimeInWorker
+        ? await app.runtimeAuth.diagnostics(req.principal!, req.query.auth === "1")
+        : await app.ops.runtimeDiagnostics(req.query.auth === "1"),
+    ),
+  );
+
+  // ----- Antigravity sign-in (Docker worker). Human session + CSRF only; MCP tokens never reach these routes. -----
+  f.get("/api/v1/runtime/auth", { preHandler: authed }, async (req) => ok(app.runtimeAuth.status(req.principal!)));
+  f.post("/api/v1/runtime/auth/sign-in", { preHandler: authed }, async (req) => ok(app.runtimeAuth.request(req.principal!, "sign_in", req.id)));
+  f.post("/api/v1/runtime/auth/sign-out", { preHandler: authed }, async (req) => ok(app.runtimeAuth.request(req.principal!, "sign_out", req.id)));
+  f.get<{ Params: { id: string } }>("/api/v1/runtime/auth/requests/:id", { preHandler: authed }, async (req) =>
+    ok(app.runtimeAuth.get(req.principal!, req.params.id)),
+  );
+  f.post<{ Params: { id: string } }>("/api/v1/runtime/auth/requests/:id/code", { preHandler: authed }, async (req) =>
+    ok(app.runtimeAuth.submitCode(req.principal!, req.params.id, parse(z.object({ code: z.string().min(1).max(600) }), req.body).code)),
+  );
+  f.post<{ Params: { id: string } }>("/api/v1/runtime/auth/requests/:id/cancel", { preHandler: authed }, async (req) =>
+    ok(app.runtimeAuth.cancel(req.principal!, req.params.id)),
   );
   f.post<{ Body: { project_id?: string } }>("/api/v1/ops/reconcile", { preHandler: authed }, async (req) =>
     ok(app.ops.reconcile(req.principal!, (req.body as { project_id?: string } | undefined)?.project_id)),

@@ -33,6 +33,23 @@ interface ChunkRow {
   text: string;
 }
 
+/** A passage as the graph needs it (no raw text). */
+interface PassageRow {
+  id: string;
+  source_id: string;
+  title: string;
+  where: string;
+  location: string;
+  detail: string;
+}
+
+interface PassageLayer {
+  key: string;
+  rows: PassageRow[];
+  norm: string[];
+  wordIndex: Map<string, number[]>;
+}
+
 export interface ConceptInfo {
   key: string;
   name: string;
@@ -91,10 +108,83 @@ const FIELD_RELATION: Record<string, string> = {
   requirement_id: "changes",
 };
 
+/** Projects whose built graph and passage layer stay in memory; older ones are rebuilt on demand (fingerprint-keyed). */
+export const GRAPH_CACHE_PROJECTS = 4;
+
+/** Map insertion order as recency: re-insert on use, drop the oldest beyond `max`. */
+function remember<V>(map: Map<string, V>, key: string, value: V, max = GRAPH_CACHE_PROJECTS): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) map.delete(map.keys().next().value!);
+}
+
 export class GraphService {
   private cache = new Map<string, BuiltGraph>();
+  /** Passage id → normalized text and its distinct words. A passage's text never changes for a given id. */
+  private textCache = new Map<string, { norm: string; words: string[] }>();
+  private passageLayers = new Map<string, PassageLayer>();
 
   constructor(private readonly ctx: Ctx) {}
+
+  private preparedText(c: ChunkRow): { norm: string; words: string[] } {
+    let p = this.textCache.get(c.id);
+    if (!p) {
+      const norm = looseNormalize(c.text);
+      p = { norm, words: [...new Set(norm.split(" "))].filter((w) => w.length >= 2) };
+      this.textCache.set(c.id, p);
+    }
+    return p;
+  }
+
+  /**
+   * The passages of a project's current revisions, with their normalized text and a word index for mention matching.
+   * Reused until passages or current revisions change: during an import most rebuilds come from knowledge changes,
+   * and re-reading ~100 MB of passage text each time blocked the worker for seconds. Raw text is not kept.
+   */
+  private passages(projectId: string, currentRevs: Set<string>, revisionsKey: string): PassageLayer {
+    const ch = one<{ n: number; l: number | null }>(
+      this.ctx.db,
+      "SELECT COUNT(*) AS n, SUM(rowid) AS l FROM chunks WHERE project_id = ? AND kind = 'evidence'",
+      projectId,
+    );
+    const key = `${ch?.n}|${ch?.l}|${revisionsKey}`;
+    const cached = this.passageLayers.get(projectId);
+    if (cached?.key === key) {
+      remember(this.passageLayers, projectId, cached);
+      return cached;
+    }
+    const raw = all<ChunkRow>(
+      this.ctx.db,
+      "SELECT id, source_id, revision_id, title, heading, locator, text FROM chunks WHERE project_id = ? AND kind = 'evidence' ORDER BY source_id, ordinal",
+      projectId,
+    ).filter((c) => currentRevs.has(c.revision_id));
+    const layer: PassageLayer = { key, rows: [], norm: [], wordIndex: new Map() };
+    raw.forEach((c, i) => {
+      const location = locatorLabel(c.locator);
+      layer.rows.push({
+        id: c.id,
+        source_id: c.source_id,
+        title: c.title,
+        where: c.heading?.trim() || location || "passage",
+        location,
+        detail: snippet(c.text),
+      });
+      const p = this.preparedText(c);
+      layer.norm.push(p.norm);
+      for (const w of p.words) {
+        const list = layer.wordIndex.get(w);
+        if (list) list.push(i);
+        else layer.wordIndex.set(w, [i]);
+      }
+    });
+    if (this.textCache.size > raw.length * 2 + 1000) {
+      // Drop passages that are no longer in the project (deleted documents, old revisions).
+      const live = new Set(raw.map((c) => c.id));
+      for (const id of this.textCache.keys()) if (!live.has(id)) this.textCache.delete(id);
+    }
+    remember(this.passageLayers, projectId, layer);
+    return layer;
+  }
 
   // =================================================================================================================
   // Job: extract concepts and relations from one source revision
@@ -270,6 +360,7 @@ export class GraphService {
         payload: { revision_id: r.id },
         createdBy: principal.kind === "user" ? principal.username : "system",
         serialKey: `graph:${projectId}`,
+        dedupeKey: `graph_extract:${r.id}`,
         maxAttempts: 2,
       });
       queued++;
@@ -283,9 +374,11 @@ export class GraphService {
 
   private fingerprint(projectId: string): string {
     const p = one<{ knowledge_revision: number; name: string }>(this.ctx.db, "SELECT knowledge_revision, name FROM projects WHERE id = ?", projectId);
+    // Answered from the (project_id, kind) index alone. SUM(length(text)) read every passage's text (~3 s on a large
+    // project) on each cache check. Rows are only ever inserted or deleted, so count + rowids track every change.
     const ch = one<{ n: number; l: number | null }>(
       this.ctx.db,
-      "SELECT COUNT(*) AS n, SUM(length(text)) AS l FROM chunks WHERE project_id = ? AND kind = 'evidence'",
+      "SELECT COUNT(*) AS n, SUM(rowid) AS l FROM chunks WHERE project_id = ? AND kind = 'evidence'",
       projectId,
     );
     const ke = one<{ n: number; u: string | null }>(
@@ -311,9 +404,12 @@ export class GraphService {
   build(projectId: string): BuiltGraph {
     const fp = this.fingerprint(projectId);
     const cached = this.cache.get(projectId);
-    if (cached && cached.fingerprint === fp) return cached;
+    if (cached && cached.fingerprint === fp) {
+      remember(this.cache, projectId, cached);
+      return cached;
+    }
     const g = this.compute(projectId, fp);
-    this.cache.set(projectId, g);
+    remember(this.cache, projectId, g);
     return g;
   }
 
@@ -351,22 +447,17 @@ export class GraphService {
         sourceFile: s.display_name,
       });
     }
-    const chunks = all<ChunkRow>(
-      this.ctx.db,
-      "SELECT id, source_id, revision_id, title, heading, locator, text FROM chunks WHERE project_id = ? AND kind = 'evidence' ORDER BY source_id, ordinal",
-      projectId,
-    ).filter((c) => currentRevs.has(c.revision_id));
+    const { rows: chunks, norm, wordIndex } = this.passages(projectId, currentRevs, sources.map((s) => s.current_revision_id ?? "").join(","));
     for (const c of chunks) {
-      const where = c.heading?.trim() || locatorLabel(c.locator) || "passage";
       addNode({
         id: nodeIdOf.passage(c.id),
-        label: `${c.title} · ${where}`.slice(0, 120),
+        label: `${c.title} · ${c.where}`.slice(0, 120),
         type: "passage",
         kind: null,
-        detail: c.text.replace(/\s+/g, " ").slice(0, 280),
+        detail: c.detail,
         href: `/projects/${projectId}/sources/${c.source_id}`,
         sourceFile: c.title,
-        location: locatorLabel(c.locator),
+        location: c.location,
       });
       addEdge({ source: nodeIdOf.source(c.source_id), target: nodeIdOf.passage(c.id), relation: "contains", confidence: "EXTRACTED" });
     }
@@ -449,17 +540,32 @@ export class GraphService {
     }
 
     // Mentions are found by code: a passage or knowledge item mentions a concept when its name or an alias appears in it.
-    const norm = chunks.map((c) => looseNormalize(c.text));
-    const wordIndex = new Map<string, number[]>();
-    norm.forEach((t, i) => {
+    const entityNorm = [...entityText.entries()].map(([hid, t]) => [hid, looseNormalize(t)] as const);
+    // Word index over knowledge items too, so each concept is checked only against items containing its rarest word.
+    const entityWords = new Map<string, number[]>();
+    entityNorm.forEach(([, t], i) => {
       for (const w of new Set(t.split(" "))) {
         if (w.length < 2) continue;
-        const list = wordIndex.get(w) ?? [];
-        list.push(i);
-        wordIndex.set(w, list);
+        const list = entityWords.get(w);
+        if (list) list.push(i);
+        else entityWords.set(w, [i]);
       }
     });
-    const entityNorm = [...entityText.entries()].map(([hid, t]) => [hid, looseNormalize(t)] as const);
+    const entitiesMentioning = (terms: string[]): Set<number> => {
+      const found = new Set<number>();
+      for (const term of terms) {
+        const words = term
+          .trim()
+          .split(" ")
+          .filter((w) => w.length >= 2);
+        // A term made only of one-letter words has no index entry: check every item, as before.
+        const candidates = words.length
+          ? (words.map((w) => entityWords.get(w) ?? []).sort((a, b) => a.length - b.length)[0] ?? [])
+          : entityNorm.map((_, i) => i);
+        for (const i of candidates) if (!found.has(i) && entityNorm[i]![1].includes(term)) found.add(i);
+      }
+      return found;
+    };
     for (const c of concepts.values()) {
       const terms = [...new Set([c.name, ...c.aliases].map(looseNormalize).filter((t) => t.trim().length >= 3))];
       const hits = new Set<number>();
@@ -474,9 +580,8 @@ export class GraphService {
       const firstDoc = chunks[hits.values().next().value ?? -1]?.title ?? chunks.find((x) => x.id === c.chunkIds[0])?.title ?? "concepts";
       addNode({ id: nodeIdOf.concept(c.key), label: c.name, type: "concept", kind: c.kind, detail: c.description, href: null, sourceFile: firstDoc });
       for (const id of c.chunkIds) addEdge({ source: nodeIdOf.passage(id), target: nodeIdOf.concept(c.key), relation: "mentions", confidence: "EXTRACTED" });
-      for (const [hid, t] of entityNorm)
-        if (terms.some((term) => t.includes(term)))
-          addEdge({ source: nodeIdOf.entity(hid), target: nodeIdOf.concept(c.key), relation: "mentions", confidence: "EXTRACTED" });
+      for (const i of [...entitiesMentioning(terms)].sort((a, b) => a - b))
+        addEdge({ source: nodeIdOf.entity(entityNorm[i]![0]), target: nodeIdOf.concept(c.key), relation: "mentions", confidence: "EXTRACTED" });
     }
     for (const c of [...concepts.values()]) if (!nodes.has(nodeIdOf.concept(c.key))) concepts.delete(c.key);
     for (const r of relations) {
@@ -754,6 +859,12 @@ export class GraphService {
   }
 }
 
+/** First 280 characters with whitespace runs collapsed; collapses only the head of long passages (same result). */
+function snippet(text: string): string {
+  const head = text.slice(0, 2000).replace(/\s+/g, " ");
+  return (head.length > 280 || text.length <= 2000 ? head : text.replace(/\s+/g, " ")).slice(0, 280);
+}
+
 function publicNode(n: GraphNode): GraphNode {
   return { id: n.id, label: n.label, type: n.type, kind: n.kind, detail: n.detail, href: n.href, degree: n.degree, community: n.community };
 }
@@ -775,31 +886,54 @@ function entityPlainText(e: KnowledgeEntity): string {
 
 /** Deterministic label propagation; communities are numbered by size and named after their best-connected concept. */
 function labelCommunities(nodes: BuiltGraph["nodes"], edges: GraphEdge[], adjacency: Map<string, number[]>): BuiltGraph["communities"] {
+  // Same algorithm and tie-breaking as before, on integer indices: a project with ~90k nodes used to spend
+  // ~10 s here (string-keyed maps, and member lists copied on every insert), blocking the worker's heartbeat.
   const ids = [...nodes.keys()].sort();
-  const label = new Map(ids.map((id, i) => [id, i]));
+  const index = new Map(ids.map((id, i) => [id, i]));
+  const neighbours: Int32Array[] = [];
+  const weights: Uint8Array[] = [];
+  for (const id of ids) {
+    const list = adjacency.get(id) ?? [];
+    const nb = new Int32Array(list.length);
+    const w = new Uint8Array(list.length);
+    list.forEach((ei, k) => {
+      const e = edges[ei]!;
+      nb[k] = index.get(e.source === id ? e.target : e.source)!;
+      w[k] = e.confidence === "INFERRED" ? 2 : 1;
+    });
+    neighbours.push(nb);
+    weights.push(w);
+  }
+  const label = Int32Array.from(ids, (_, i) => i);
+  const counts = new Map<number, number>();
   for (let iter = 0; iter < 15; iter++) {
     let changed = 0;
-    for (const id of ids) {
-      const counts = new Map<number, number>();
-      for (const i of adjacency.get(id) ?? []) {
-        const e = edges[i]!;
-        const other = e.source === id ? e.target : e.source;
-        const l = label.get(other)!;
-        counts.set(l, (counts.get(l) ?? 0) + (e.confidence === "INFERRED" ? 2 : 1));
+    for (let i = 0; i < ids.length; i++) {
+      const nb = neighbours[i]!;
+      if (!nb.length) continue;
+      const w = weights[i]!;
+      counts.clear();
+      for (let k = 0; k < nb.length; k++) {
+        const l = label[nb[k]!]!;
+        counts.set(l, (counts.get(l) ?? 0) + w[k]!);
       }
-      if (!counts.size) continue;
-      let best = label.get(id)!;
+      let best = label[i]!;
       let bestN = -1;
       for (const [l, n] of counts) if (n > bestN || (n === bestN && l < best)) [best, bestN] = [l, n];
-      if (best !== label.get(id)) {
-        label.set(id, best);
+      if (best !== label[i]) {
+        label[i] = best;
         changed++;
       }
     }
     if (!changed) break;
   }
   const groups = new Map<number, string[]>();
-  for (const [id, l] of label) groups.set(l, [...(groups.get(l) ?? []), id]);
+  ids.forEach((id, i) => {
+    const l = label[i]!;
+    const g = groups.get(l);
+    if (g) g.push(id);
+    else groups.set(l, [id]);
+  });
   const ordered = [...groups.values()].sort((a, b) => b.length - a.length);
   return ordered.map((members, i) => {
     for (const m of members) nodes.get(m)!.community = i;

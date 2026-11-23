@@ -20,3 +20,8 @@ data/
 .DS_Store
 next-env.d.ts
 *.tsbuildinfo
+
+# Docker: local backups and compose settings (may contain paths); keep the folders
+docker/backups/*
+!docker/backups/.gitkeep
+docker/compose.env

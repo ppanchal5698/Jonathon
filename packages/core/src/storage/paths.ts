@@ -12,13 +12,7 @@ const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
  * Windows reserved device names and trailing dots/spaces.
  */
 export function assertSafeSegment(segment: string): string {
-  if (
-    typeof segment !== "string" ||
-    !SAFE_SEGMENT.test(segment) ||
-    segment.includes("..") ||
-    WINDOWS_RESERVED.test(segment) ||
-    /[. ]$/.test(segment)
-  ) {
+  if (typeof segment !== "string" || !SAFE_SEGMENT.test(segment) || segment.includes("..") || WINDOWS_RESERVED.test(segment) || /[. ]$/.test(segment)) {
     throw new AppError("UNSAFE_PATH", "unsafe path segment rejected", { details: { segment: String(segment).slice(0, 80) } });
   }
   return segment;

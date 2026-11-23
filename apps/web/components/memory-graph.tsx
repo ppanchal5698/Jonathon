@@ -2,7 +2,7 @@
 
 import type { GraphEdge, GraphNode } from "@jonathon/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { A, Badge, Button, Card, cx, ErrorBanner, Input, Loading, Notice, Time } from "@/components/ui";
+import { A, Badge, Button, buttonClass, Card, CardSkeleton, ErrorBanner, Input, Notice, Skeleton, Time } from "@/components/ui";
 import { type ApiError, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
@@ -138,7 +138,7 @@ function GraphCanvas({ hood, selected, onSelect }: { hood: Hood; selected: strin
   useEffect(() => {
     const el = wrap.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setSize({ w: Math.max(320, el.clientWidth), h: el.clientWidth < 640 ? 380 : 520 }));
+    const ro = new ResizeObserver(() => setSize({ w: Math.max(240, el.clientWidth), h: el.clientWidth < 640 ? 360 : 520 }));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -233,25 +233,28 @@ function GraphCanvas({ hood, selected, onSelect }: { hood: Hood; selected: strin
   };
 
   return (
-    <div ref={wrap} className="relative w-full overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
-      <canvas
-        ref={ref}
-        style={{ width: size.w, height: size.h, cursor: hover ? "pointer" : "default" }}
-        onMouseMove={(e) => setHover(pick(e))}
-        onMouseLeave={() => setHover(null)}
-        onClick={(e) => {
-          const id = pick(e);
-          if (id) onSelect(id);
-        }}
-        role="img"
-        aria-label={`Graph around ${hood.nodes.find((n) => n.id === hood.center)?.label ?? "the selected node"}: ${hood.nodes.length} nodes. Use the list beside it to navigate with the keyboard.`}
-      />
-      {hover && (
-        <div className="pointer-events-none absolute left-3 top-3 max-w-sm rounded-lg bg-gray-900/90 px-3 py-2 text-theme-xs text-white">
-          {hood.nodes.find((n) => n.id === hover)?.label}
-        </div>
-      )}
-      <div className="absolute bottom-2 left-3 flex flex-wrap gap-x-3 gap-y-1 text-theme-xs text-gray-500">
+    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+      <div ref={wrap} className="relative w-full">
+        <canvas
+          ref={ref}
+          style={{ width: size.w, height: size.h, cursor: hover ? "pointer" : "default" }}
+          onMouseMove={(e) => setHover(pick(e))}
+          onMouseLeave={() => setHover(null)}
+          onClick={(e) => {
+            const id = pick(e);
+            if (id) onSelect(id);
+          }}
+          role="img"
+          aria-label={`Graph around ${hood.nodes.find((n) => n.id === hood.center)?.label ?? "the selected node"}: ${hood.nodes.length} nodes. Use the list beside it to navigate with the keyboard.`}
+        />
+        {hover && (
+          <div className="pointer-events-none absolute top-3 left-3 max-w-[calc(100%-1.5rem)] rounded-lg bg-gray-900/90 px-3 py-2 text-theme-xs text-white">
+            {hood.nodes.find((n) => n.id === hover)?.label}
+          </div>
+        )}
+      </div>
+      {/* Legend below the canvas (it used to sit on top of the graph and hide nodes on small screens). */}
+      <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-gray-100 px-3 py-2 text-theme-xs text-gray-600 dark:border-gray-800 dark:text-gray-400">
         {Object.entries(TYPE_LABEL).map(([t, l]) => (
           <span key={t} className="inline-flex items-center gap-1">
             <span className="inline-block h-2 w-2 rounded-full" style={{ background: TYPE_COLOR[t] }} />
@@ -260,6 +263,31 @@ function GraphCanvas({ hood, selected, onSelect }: { hood: Hood; selected: strin
         ))}
         <span>· dashed: AI-labelled relation (quote verified)</span>
       </div>
+    </div>
+  );
+}
+
+/** Placeholder with the graph's size: a few faint nodes so the layout does not jump. */
+function CanvasSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading graph"
+      className="relative h-[360px] w-full overflow-hidden rounded-xl border border-gray-200 bg-white sm:h-[520px] dark:border-gray-800 dark:bg-gray-900"
+    >
+      <span className="sr-only">Loading graph…</span>
+      {[
+        [50, 50, 7],
+        [30, 32, 4],
+        [68, 28, 4],
+        [24, 64, 3],
+        [72, 70, 4],
+        [48, 82, 3],
+        [84, 46, 3],
+        [16, 44, 3],
+      ].map(([x, y, r]) => (
+        <Skeleton key={`${x}-${y}`} className="absolute rounded-full" style={{ left: `${x}%`, top: `${y}%`, width: `${r! * 4}px`, height: `${r! * 4}px` }} />
+      ))}
     </div>
   );
 }
@@ -277,7 +305,16 @@ export function MemoryGraph({ pid, aiEnabled, initialNode }: { pid: string; aiEn
   const detail = useApi<NodeDetail>(start ? `/projects/${pid}/graph/node?id=${encodeURIComponent(start)}` : null);
 
   if (ov.error) return <ErrorBanner error={ov.error} />;
-  if (!ov.data) return <Loading />;
+  if (!ov.data)
+    return (
+      <div className="space-y-6">
+        <CardSkeleton lines={4} label="memory graph" />
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+          <CanvasSkeleton />
+          <CardSkeleton lines={6} label="node details" />
+        </div>
+      </div>
+    );
   const o = ov.data;
   const map = async (force: boolean) => {
     setError(null);
@@ -307,10 +344,7 @@ export function MemoryGraph({ pid, aiEnabled, initialNode }: { pid: string; aiEn
             <Button variant="secondary" disabled={!aiEnabled || o.mapping_jobs_pending > 0 || o.documents_total === 0} onClick={() => void map(true)}>
               Re-map all
             </Button>
-            <a
-              className="inline-flex items-center rounded-lg px-4 py-2.5 text-theme-sm font-medium text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-500/[0.12]"
-              href={`/api/v1/projects/${pid}/graph/export`}
-            >
+            <a className={buttonClass("ghost")} href={`/api/v1/projects/${pid}/graph/export`}>
               Download graph.json
             </a>
           </div>
@@ -362,13 +396,13 @@ export function MemoryGraph({ pid, aiEnabled, initialNode }: { pid: string; aiEn
           </form>
           {query && results.data && (
             <div className="flex flex-wrap gap-2">
-              {results.data.length === 0 && <span className="text-theme-sm text-gray-500">No match.</span>}
+              {results.data.length === 0 && <span className="text-theme-sm text-gray-500 dark:text-gray-400">No match.</span>}
               {results.data.map((n) => (
                 <button
                   key={n.id}
                   type="button"
                   onClick={() => setSelected(n.id)}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-3 py-1 text-theme-xs text-gray-700 hover:border-brand-300 dark:border-gray-700 dark:text-gray-300"
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-gray-200 px-3 py-1 text-left text-theme-xs text-gray-700 transition-colors hover:border-brand-300 hover:bg-brand-25 dark:border-gray-700 dark:text-gray-300 dark:hover:border-brand-800 dark:hover:bg-white/[0.03]"
                 >
                   <span className="inline-block h-2 w-2 rounded-full" style={{ background: TYPE_COLOR[n.type] }} />
                   {n.label.slice(0, 60)}
@@ -380,10 +414,10 @@ export function MemoryGraph({ pid, aiEnabled, initialNode }: { pid: string; aiEn
             <Notice tone="info">Upload documents to build the graph.</Notice>
           ) : hood.data ? (
             <>
-              <div className="flex flex-wrap items-center gap-2 text-theme-sm text-gray-500">
+              <div className="flex flex-wrap items-center gap-2 text-theme-sm text-gray-500 dark:text-gray-400">
                 <span>Show</span>
                 {[1, 2].map((d) => (
-                  <Button key={d} size="sm" variant={depth === d ? "primary" : "secondary"} onClick={() => setDepth(d)}>
+                  <Button key={d} size="sm" variant={depth === d ? "primary" : "secondary"} aria-pressed={depth === d} onClick={() => setDepth(d)}>
                     {d === 1 ? "direct links" : "two steps"}
                   </Button>
                 ))}
@@ -394,7 +428,7 @@ export function MemoryGraph({ pid, aiEnabled, initialNode }: { pid: string; aiEn
               <GraphCanvas hood={hood.data} selected={start ?? ""} onSelect={setSelected} />
             </>
           ) : (
-            <Loading />
+            <CanvasSkeleton />
           )}
         </div>
 
@@ -406,7 +440,9 @@ export function MemoryGraph({ pid, aiEnabled, initialNode }: { pid: string; aiEn
             >
               <div className="space-y-3 text-theme-sm text-gray-700 dark:text-gray-300">
                 {detail.data.node.href && <A href={detail.data.node.href}>Open</A>}
-                {detail.data.aliases.length > 0 && <p className="text-theme-xs text-gray-500">Also called: {detail.data.aliases.join(", ")}</p>}
+                {detail.data.aliases.length > 0 && (
+                  <p className="text-theme-xs text-gray-500 dark:text-gray-400">Also called: {detail.data.aliases.join(", ")}</p>
+                )}
                 {detail.data.text ? (
                   <blockquote className="max-h-60 overflow-y-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-theme-xs dark:bg-white/[0.03]">
                     {detail.data.text}
@@ -414,22 +450,28 @@ export function MemoryGraph({ pid, aiEnabled, initialNode }: { pid: string; aiEn
                 ) : (
                   detail.data.node.detail && <p>{detail.data.node.detail}</p>
                 )}
-                {detail.data.location && <p className="text-theme-xs text-gray-500">{detail.data.location}</p>}
+                {detail.data.location && <p className="text-theme-xs text-gray-500 dark:text-gray-400">{detail.data.location}</p>}
                 {[...groups.entries()].map(([rel, links]) => (
                   <div key={rel}>
-                    <p className="mb-1 text-theme-xs font-medium uppercase tracking-wide text-gray-500">
+                    <p className="mb-1 text-theme-xs font-medium tracking-wide text-gray-500 uppercase dark:text-gray-400">
                       {rel.replace(/_/g, " ")} ({links.length})
                     </p>
                     <ul className="space-y-1">
                       {links.slice(0, 25).map((l) => (
                         <li key={`${l.direction}${l.relation}${l.node.id}`}>
-                          <button type="button" onClick={() => setSelected(l.node.id)} className={cx("text-left text-brand-500 hover:underline")}>
+                          <button
+                            type="button"
+                            onClick={() => setSelected(l.node.id)}
+                            className="text-left font-medium [overflow-wrap:anywhere] text-brand-600 hover:underline dark:text-brand-400"
+                          >
                             {l.node.label.slice(0, 90)}
                           </button>
-                          {l.confidence === "INFERRED" && l.quote && <p className="text-theme-xs text-gray-500">AI-labelled · “{l.quote}”</p>}
+                          {l.confidence === "INFERRED" && l.quote && (
+                            <p className="text-theme-xs text-gray-500 dark:text-gray-400">AI-labelled · “{l.quote}”</p>
+                          )}
                         </li>
                       ))}
-                      {links.length > 25 && <li className="text-theme-xs text-gray-500">and {links.length - 25} more</li>}
+                      {links.length > 25 && <li className="text-theme-xs text-gray-500 dark:text-gray-400">and {links.length - 25} more</li>}
                     </ul>
                   </div>
                 ))}
@@ -443,10 +485,10 @@ export function MemoryGraph({ pid, aiEnabled, initialNode }: { pid: string; aiEn
                   key={n.id}
                   type="button"
                   onClick={() => setSelected(n.id)}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-3 py-1 text-theme-xs text-gray-700 hover:border-brand-300 dark:border-gray-700 dark:text-gray-300"
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-gray-200 px-3 py-1 text-left text-theme-xs text-gray-700 transition-colors hover:border-brand-300 hover:bg-brand-25 dark:border-gray-700 dark:text-gray-300 dark:hover:border-brand-800 dark:hover:bg-white/[0.03]"
                 >
                   <span className="inline-block h-2 w-2 rounded-full" style={{ background: TYPE_COLOR[n.type] }} />
-                  {n.label.slice(0, 40)} <span className="text-gray-400">{n.degree}</span>
+                  {n.label.slice(0, 40)} <span className="text-gray-500 tabular-nums dark:text-gray-400">{n.degree}</span>
                 </button>
               ))}
             </div>

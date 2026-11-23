@@ -4,17 +4,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "../logger";
 import { AppError } from "../util";
+import { clearAgySignIn, runAgySignIn, type SignInOutcome } from "./agy-auth";
 import { NdjsonParser } from "./ndjson";
 import { AGENTS, EXTRACTION_EFFORT_SCHEMAS, type PolicyPaths, prepareWorkspace, writePolicyFiles } from "./policy";
 import { killProcessTree, treeSpawnOptions } from "./process-tree";
-import type {
-  AuthInfo,
-  CapabilityInfo,
-  InstallationInfo,
-  NormalizedRuntimeResult,
-  ReasoningRuntime,
-  RuntimeRunRequest,
-} from "./types";
+import type { AuthInfo, CapabilityInfo, InstallationInfo, NormalizedRuntimeResult, ReasoningRuntime, RuntimeRunRequest } from "./types";
 
 export interface AntigravityOptions {
   dataDir: string;
@@ -30,10 +24,14 @@ export interface AntigravityOptions {
   maxConcurrent?: number;
   /** Extra env for tests only (e.g. fixture scenario). Never used for secrets. */
   extraEnv?: Record<string, string>;
+  /** Run the sign-in session in a pseudo-terminal (default: on Linux). Tests turn it off for the fixture CLI. */
+  signInPty?: boolean;
   log?: Logger;
 }
 
-/** Flags Jonathon depends on; all verified on agy 1.5.9 (docs/compatibility.md). */
+/** Flags Jonathon depends on; verified on agy 1.5.9 (Windows host) and 1.5.13 (host and the Linux worker image). */
+export const VERIFIED_AGY_VERSIONS = ["1.5.9", "1.5.13"] as const;
+
 export const REQUIRED_FLAGS = [
   "--input-format",
   "--output-format",
@@ -162,6 +160,38 @@ export class AntigravityCliRuntime implements ReasoningRuntime {
     });
   }
 
+  /**
+   * One Google sign-in session for agy (Docker worker only; see runtime/agy-auth.ts). Runs in its own empty workspace
+   * with the tool-free agent and the session deny settings, like every other run.
+   */
+  signIn(opts: {
+    onUrl: (url: string) => void;
+    waitForCode: (signal: AbortSignal) => Promise<string>;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  }): Promise<SignInOutcome> {
+    this.policy = writePolicyFiles(this.o.dataDir);
+    const ws = prepareWorkspace(this.o.dataDir, "agy-signin");
+    return runAgySignIn({
+      executable: this.o.executable,
+      argsPrefix: this.o.argsPrefix,
+      cwd: ws.cwd,
+      settingsPath: this.policy.settingsPath,
+      agentName: AGENTS.answer.name,
+      env: runtimeEnv(this.o.extraEnv),
+      usePty: this.o.signInPty ?? process.platform === "linux",
+      timeoutMs: opts.timeoutMs ?? 90_000,
+      signal: opts.signal,
+      onUrl: opts.onUrl,
+      waitForCode: opts.waitForCode,
+    });
+  }
+
+  /** Remove agy's stored sign-in from Jonathon's dedicated agy home. Callers verify with checkAuthentication(). */
+  clearSignIn(home: string, thorough: boolean): string[] {
+    return clearAgySignIn(home, thorough);
+  }
+
   async inspectInstallation(): Promise<InstallationInfo> {
     const r = await this.exec(["--version"], 15_000);
     if (r.error) {
@@ -204,7 +234,11 @@ export class AntigravityCliRuntime implements ReasoningRuntime {
     const out = `${r.stdout}\n${r.stderr}`;
     if (r.error) return { status: "unknown", detail: "agy could not be started", contactsProvider: true };
     if (/auth|log ?in|sign ?in|credential/i.test(r.stderr) && r.code !== 0) {
-      return { status: "auth_required", detail: "agy reports that authentication is required. Run `agy` once interactively and sign in.", contactsProvider: true };
+      return {
+        status: "auth_required",
+        detail: "agy reports that authentication is required. Run `agy` once interactively and sign in.",
+        contactsProvider: true,
+      };
     }
     const models = out.split("\n").filter((l) => /^[a-z0-9][a-z0-9._-]+\t/i.test(l.trim()) || /^[a-z0-9.-]+-[a-z0-9.-]+\s{1,}\S/.test(l));
     if (r.code === 0 && models.length > 0) return { status: "authenticated", detail: `${models.length} models available`, contactsProvider: true };
@@ -316,7 +350,8 @@ export class AntigravityCliRuntime implements ReasoningRuntime {
       let resultEvent: Record<string, unknown> | null = null;
       let textDeltas = "";
       const denials: string[] = [];
-      let abortReason: { code: "JOB_CANCELLED" | "ANTIGRAVITY_TIMEOUT" | "ANTIGRAVITY_POLICY_VIOLATION" | "INVALID_RUNTIME_OUTPUT"; message: string } | null = null;
+      let abortReason: { code: "JOB_CANCELLED" | "ANTIGRAVITY_TIMEOUT" | "ANTIGRAVITY_POLICY_VIOLATION" | "INVALID_RUNTIME_OUTPUT"; message: string } | null =
+        null;
 
       const stop = (reason: NonNullable<typeof abortReason>) => {
         if (abortReason) return;
@@ -350,7 +385,10 @@ export class AntigravityCliRuntime implements ReasoningRuntime {
               const info = (st.tool_info ?? {}) as Record<string, unknown>;
               const err = (info.error ?? {}) as Record<string, unknown>;
               if (typeof err.message === "string" && /denied|deny rule/i.test(err.message)) denials.push(String(st.tool_name ?? "tool"));
-              stop({ code: "ANTIGRAVITY_POLICY_VIOLATION", message: `runtime attempted a tool (${String(st.tool_name ?? "unknown")}); Jonathon runs are tool-free` });
+              stop({
+                code: "ANTIGRAVITY_POLICY_VIOLATION",
+                message: `runtime attempted a tool (${String(st.tool_name ?? "unknown")}); Jonathon runs are tool-free`,
+              });
             } else if (st.step_type === "agent_response") {
               if (typeof st.text_delta === "string" && textDeltas.length < 200_000) textDeltas += st.text_delta;
               if (st.state === "ACTIVE") req.onProgress?.("model responding");
@@ -464,7 +502,8 @@ export class AntigravityCliRuntime implements ReasoningRuntime {
     const finishedReason = typeof r.finished_reason === "string" ? r.finished_reason : null;
     const convId = (typeof r.conversation_id === "string" && r.conversation_id) || input.conversationId;
     const contextRebuilt = !!input.requestedConversationId && convId !== input.requestedConversationId;
-    if (contextRebuilt) warnings.push("runtime_context_rebuilt: the stored runtime conversation was not found; a new one was started with history rebuilt by Jonathon");
+    if (contextRebuilt)
+      warnings.push("runtime_context_rebuilt: the stored runtime conversation was not found; a new one was started with history rebuilt by Jonathon");
     if (/warning:/i.test(input.stderr)) warnings.push(`runtime warning: ${sanitizeStderr(input.stderr.split("\n").find((l) => /warning:/i.test(l)) ?? "")}`);
 
     let completion: NormalizedRuntimeResult["completion"] = "success";
@@ -474,9 +513,7 @@ export class AntigravityCliRuntime implements ReasoningRuntime {
     else if (status !== "SUCCESS" || input.exitCode !== 0 || finishedReason === "error") completion = "error";
 
     const usageRaw = (r.usage ?? null) as Record<string, unknown> | null;
-    const usage = usageRaw
-      ? Object.fromEntries(Object.entries(usageRaw).filter(([, v]) => typeof v === "number")) as Record<string, number>
-      : null;
+    const usage = usageRaw ? (Object.fromEntries(Object.entries(usageRaw).filter(([, v]) => typeof v === "number")) as Record<string, number>) : null;
     return {
       provider: "antigravity-cli",
       runtimeVersion: this.version,

@@ -2,7 +2,11 @@ import { z } from "zod";
 import { EntityTypeSchema, ProjectIdSchema, SearchableTypeSchema, StatementSchema } from "./domain";
 
 export const SetupAccountBodySchema = z.object({
-  username: z.string().min(3).max(64).regex(/^[a-zA-Z0-9._-]+$/),
+  username: z
+    .string()
+    .min(3)
+    .max(64)
+    .regex(/^[a-zA-Z0-9._-]+$/),
   password: z.string().min(12).max(256),
 });
 export const LoginBodySchema = z.object({
@@ -48,9 +52,7 @@ export const SearchBodySchema = z.object({
 export const EntityDraftBodySchema = z.object({
   title: z.string().trim().min(3).max(200),
   fields: z.record(z.string(), z.union([z.string(), z.array(z.string()), z.number(), z.boolean(), z.null()])).default({}),
-  sections: z
-    .record(z.string(), z.union([z.string(), z.array(z.string()), z.array(StatementSchema)]))
-    .default({}),
+  sections: z.record(z.string(), z.union([z.string(), z.array(z.string()), z.array(StatementSchema)])).default({}),
 });
 
 export const CreateEntityBodySchema = EntityDraftBodySchema.extend({ entity_type: EntityTypeSchema });
@@ -107,6 +109,20 @@ export const ReviewActionBodySchema = z.object({
 });
 export type ReviewActionBody = z.infer<typeof ReviewActionBodySchema>;
 
+/** Import documents from a folder on this computer (human session only). */
+export const FolderScanBodySchema = z.object({
+  path: z.string().min(3).max(1_000),
+  recursive: z.boolean().default(true),
+});
+export const FolderImportBodySchema = FolderScanBodySchema.extend({
+  /** Relative paths from the scan to import. */
+  files: z.array(z.string().min(1).max(1_000)).min(1).max(2_000),
+});
+
+export const DeleteProjectBodySchema = z.object({
+  /** Must equal "delete <project name>". */
+  confirmation: z.string().max(300),
+});
 export const DeleteSourceBodySchema = z.object({
   /** Must equal "delete <source display name>". */
   confirmation: z.string().max(300),

@@ -2,8 +2,9 @@
 
 import type { Project } from "@jonathon/contracts";
 import { type FormEvent, useState } from "react";
+import { Modal } from "@/components/review";
 import { Shell } from "@/components/shell";
-import { Badge, Button, Card, Empty, ErrorBanner, Field, Input, PageHeader, Time, table } from "@/components/ui";
+import { Badge, Button, Card, Checkbox, Empty, ErrorBanner, Field, Input, PageHeader, Pagination, TableSkeleton, Time, table, usePaged } from "@/components/ui";
 import { type ApiError, get, post } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 
@@ -37,7 +38,11 @@ function McpBody() {
   const [propose, setPropose] = useState(false);
   const [expires, setExpires] = useState("90");
   const [log, setLog] = useState<{ id: string; rows: Array<Record<string, string>> } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [revoking, setRevoking] = useState<{ id: string; name: string } | null>(null);
   const names = new Map((projects.data ?? []).map((p) => [p.id, p.name]));
+  const tokenPage = usePaged(tokens.data, 10);
+  const logPage = usePaged(log?.rows, 20, log?.id ?? null);
 
   const create = async (e: FormEvent) => {
     e.preventDefault();
@@ -60,11 +65,34 @@ function McpBody() {
       <PageHeader title="MCP access for Claude Code" crumbs={[{ label: "MCP access" }]} />
       {created && (
         <Card title="New credential (shown once)" className="border-amber-500 dark:border-amber-500/40">
-          <p className="text-sm">Copy it now. Jonathon stores only a hash and cannot show it again. Keep it out of Git; put it in your shell environment.</p>
+          <p className="text-theme-sm text-gray-700 dark:text-gray-300">
+            Copy it now. Jonathon stores only a hash and cannot show it again. Keep it out of Git; put it in your shell environment.
+          </p>
           <pre className="custom-scrollbar mt-3 overflow-x-auto rounded-xl bg-gray-900 p-4 text-theme-xs text-gray-100 dark:bg-black/40">{`# 1. In your shell (PowerShell: $env:JONATHON_MCP_TOKEN = "...")\nexport JONATHON_MCP_TOKEN="${created.token}"\n\n# 2. Register the server with Claude Code (user scope keeps the token out of the repo)\nclaude mcp add --transport http --scope user jonathon ${created.mcp_url} --header "Authorization: Bearer \${JONATHON_MCP_TOKEN}"`}</pre>
           <div className="mt-4 flex gap-3">
-            <Button variant="secondary" onClick={() => navigator.clipboard.writeText(created.token)}>Copy token</Button>
-            <Button variant="ghost" onClick={() => setCreated(null)}>I stored it</Button>
+            <Button
+              variant="secondary"
+              onClick={() =>
+                void navigator.clipboard.writeText(created.token).then(
+                  () => setCopied(true),
+                  () => setCopied(false),
+                )
+              }
+            >
+              {copied ? "Copied" : "Copy token"}
+            </Button>
+            <span className="sr-only" aria-live="polite">
+              {copied ? "Token copied to the clipboard." : ""}
+            </span>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setCreated(null);
+                setCopied(false);
+              }}
+            >
+              I stored it
+            </Button>
           </div>
         </Card>
       )}
@@ -74,24 +102,37 @@ function McpBody() {
             <Field label="Name">{(id) => <Input id={id} value={name} onChange={(e) => setName(e.target.value)} required />}</Field>
             <fieldset>
               <legend className="mb-2 text-theme-sm font-medium text-gray-700 dark:text-gray-400">Projects</legend>
-              {(projects.data ?? []).map((p) => (
-                <label key={p.id} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={selected.includes(p.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, p.id] : selected.filter((x) => x !== p.id))} />
-                  {p.name}
-                </label>
-              ))}
-              {!projects.data?.length && <p className="text-sm text-gray-500">Create a project first.</p>}
+              <div className="space-y-1">
+                {(projects.data ?? []).map((p) => (
+                  <label key={p.id} className="flex w-fit cursor-pointer items-center gap-2 py-1 text-theme-sm text-gray-700 dark:text-gray-300">
+                    <Checkbox
+                      checked={selected.includes(p.id)}
+                      onChange={(e) => setSelected(e.target.checked ? [...selected, p.id] : selected.filter((x) => x !== p.id))}
+                    />
+                    {p.name}
+                  </label>
+                ))}
+              </div>
+              {!projects.data?.length && <p className="text-theme-sm text-gray-500 dark:text-gray-400">Create a project first.</p>}
             </fieldset>
-            <label className="flex items-start gap-2 text-sm">
-              <input type="checkbox" checked={propose} onChange={(e) => setPropose(e.target.checked)} className="mt-0.5 size-5 shrink-0 cursor-pointer rounded-md accent-brand-500" />
+            <label className="flex cursor-pointer items-start gap-2 text-theme-sm text-gray-700 dark:text-gray-300">
+              <Checkbox checked={propose} onChange={(e) => setPropose(e.target.checked)} className="mt-0.5" />
               <span>Allow proposing requirement changes (never approval). Reading is always included.</span>
             </label>
-            <Field label="Expires after (days)">{(id) => <Input id={id} type="number" min={1} max={365} value={expires} onChange={(e) => setExpires(e.target.value)} />}</Field>
+            <Field label="Expires after (days)">
+              {(id) => <Input id={id} type="number" min={1} max={365} value={expires} onChange={(e) => setExpires(e.target.value)} />}
+            </Field>
             <ErrorBanner error={error} />
-            <Button type="submit" disabled={!selected.length}>Create credential</Button>
+            <Button type="submit" disabled={!selected.length}>
+              Create credential
+            </Button>
           </form>
         </Card>
-        <Card title="Connect Claude Code" desc="Jonathon serves MCP over Streamable HTTP on this machine only." className="col-span-12 lg:col-span-6 xl:col-span-7">
+        <Card
+          title="Connect Claude Code"
+          desc="Jonathon serves MCP over Streamable HTTP on this machine only."
+          className="col-span-12 lg:col-span-6 xl:col-span-7"
+        >
           <ol className="space-y-4">
             {[
               ["Create a credential", "Pick only the projects this repository needs. Leave proposing off unless Claude Code should file change proposals."],
@@ -100,7 +141,9 @@ function McpBody() {
               ["Add repository instructions", "Copy docs/sample-CLAUDE.md into the client repository as CLAUDE.md and set the project ID."],
             ].map(([t, d], i) => (
               <li key={t} className="flex gap-3">
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-50 text-theme-sm font-semibold text-brand-500 dark:bg-brand-500/15 dark:text-brand-400">{i + 1}</span>
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-50 text-theme-sm font-semibold text-brand-600 dark:bg-brand-500/15 dark:text-brand-400">
+                  {i + 1}
+                </span>
                 <span>
                   <span className="block text-theme-sm font-medium text-gray-800 dark:text-white/90">{t}</span>
                   <span className="text-theme-sm text-gray-500 dark:text-gray-400">{d}</span>
@@ -108,51 +151,149 @@ function McpBody() {
               </li>
             ))}
           </ol>
-          <p className="mt-5 text-theme-xs text-gray-500 dark:text-gray-400">Tools: list_projects, ask_jonathon, search_knowledge, get_requirement, get_feature_spec, get_job, propose_requirement_change. There is no approval tool.</p>
+          <p className="mt-5 text-theme-xs text-gray-500 dark:text-gray-400">
+            Tools: list_projects, ask_jonathon, search_knowledge, get_requirement, get_feature_spec, get_job, list_documents, get_document, search_memory_graph,
+            explore_memory_graph, propose_requirement_change. There is no approval or editing tool.
+          </p>
         </Card>
         <Card title="Credentials" className="col-span-12">
-          {tokens.data?.length ? (
-            <div className={table.wrap}>
-            <table className={table.table}>
-              <thead className={table.thead}><tr><th className={table.th}>Name</th><th className={table.th}>Scopes</th><th className={table.th}>Projects</th><th className={table.th}>Expires</th><th className={table.th}>Last used</th><th className={table.th}><span className="sr-only">Actions</span></th></tr></thead>
-              <tbody>
-                {tokens.data.map((t) => (
-                  <tr key={t.id} className={`${table.tr} align-top`}>
-                    <td className={table.td}><span className="font-medium text-gray-800 dark:text-white/90">{t.name}</span> <code className="text-theme-xs text-gray-500">{t.token_prefix}…</code>{t.revoked_at && <> <Badge tone="error">revoked</Badge></>}</td>
-                    <td className={table.td}><div className="flex gap-1">{t.scopes.map((sc) => <Badge key={sc} tone={sc === "propose" ? "warning" : "primary"}>{sc}</Badge>)}</div></td>
-                    <td className={`${table.td} text-theme-xs`}>{t.project_ids.map((p) => names.get(p) ?? p).join(", ")}</td>
-                    <td className={`${table.td} text-theme-xs`}>{t.expires_at ? <Time iso={t.expires_at} /> : "never"}</td>
-                    <td className={`${table.td} text-theme-xs`}><Time iso={t.last_used_at} /></td>
-                    <td className={`${table.td} space-x-1 text-right whitespace-nowrap`}>
-                      <Button variant="ghost" onClick={async () => setLog({ id: t.id, rows: await get(`/mcp/tokens/${t.id}/access`) })}>Access log</Button>
-                      {!t.revoked_at && (
-                        <>
-                          <Button variant="ghost" onClick={async () => { try { setCreated(await post(`/mcp/tokens/${t.id}/rotate`)); void tokens.reload(); } catch (e) { setError(e as ApiError); } }}>Rotate</Button>
-                          <Button variant="danger" onClick={async () => { if (confirm(`Revoke ${t.name}? Clients using it stop working immediately.`)) { await post(`/mcp/tokens/${t.id}/revoke`); void tokens.reload(); } }}>Revoke</Button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
+          {!tokens.data && !tokens.error ? (
+            <TableSkeleton rows={3} cols={6} label="credentials" />
+          ) : tokens.data?.length ? (
+            <>
+              <div className={table.wrap}>
+                <table className={table.table}>
+                  <thead className={table.thead}>
+                    <tr>
+                      <th className={table.th}>Name</th>
+                      <th className={table.th}>Scopes</th>
+                      <th className={table.th}>Projects</th>
+                      <th className={table.th}>Expires</th>
+                      <th className={table.th}>Last used</th>
+                      <th className={table.th}>
+                        <span className="sr-only">Actions</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tokenPage.items.map((t) => (
+                      <tr key={t.id} className={`${table.tr} align-top`}>
+                        <td className={table.td}>
+                          <span className="font-medium text-gray-800 dark:text-white/90">{t.name}</span>{" "}
+                          <code className="text-theme-xs text-gray-500 dark:text-gray-400">{t.token_prefix}…</code>
+                          {t.revoked_at && (
+                            <>
+                              {" "}
+                              <Badge tone="error">revoked</Badge>
+                            </>
+                          )}
+                        </td>
+                        <td className={table.td}>
+                          <div className="flex flex-wrap gap-1">
+                            {t.scopes.map((sc) => (
+                              <Badge key={sc} tone={sc === "propose" ? "warning" : "primary"}>
+                                {sc}
+                              </Badge>
+                            ))}
+                          </div>
+                        </td>
+                        <td className={`${table.td} text-theme-xs`}>{t.project_ids.map((p) => names.get(p) ?? p).join(", ")}</td>
+                        <td className={`${table.td} text-theme-xs`}>{t.expires_at ? <Time iso={t.expires_at} /> : "never"}</td>
+                        <td className={`${table.td} text-theme-xs`}>
+                          <Time iso={t.last_used_at} />
+                        </td>
+                        <td className={`${table.td} space-x-1 text-right whitespace-nowrap`}>
+                          <Button
+                            variant="ghost"
+                            onClick={async () => {
+                              try {
+                                setLog({ id: t.id, rows: await get(`/mcp/tokens/${t.id}/access`) });
+                              } catch (e) {
+                                setError(e as ApiError);
+                              }
+                            }}
+                          >
+                            Access log
+                          </Button>
+                          {!t.revoked_at && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                onClick={async () => {
+                                  try {
+                                    setCreated(await post(`/mcp/tokens/${t.id}/rotate`));
+                                    void tokens.reload();
+                                  } catch (e) {
+                                    setError(e as ApiError);
+                                  }
+                                }}
+                              >
+                                Rotate
+                              </Button>
+                              <Button variant="danger" onClick={() => setRevoking({ id: t.id, name: t.name })}>
+                                Revoke
+                              </Button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Pagination paged={tokenPage} label="Credentials" />
+            </>
           ) : (
             <Empty title="No credentials" />
           )}
           {log && (
             <div className="mt-6">
-              <h3 className="text-sm font-semibold">Access history</h3>
-              <ul className="custom-scrollbar mt-2 max-h-72 space-y-1 overflow-auto text-theme-xs text-gray-600 dark:text-gray-300">
-                {log.rows.map((r, i) => (
-                  <li key={i}><Time iso={r.at} /> · {r.tool} · {r.outcome}{r.error_code ? ` (${r.error_code})` : ""}</li>
+              <h3 className="text-theme-sm font-semibold text-gray-800 dark:text-white/90">Access history</h3>
+              <ul className="mt-2 space-y-1 text-theme-xs text-gray-600 dark:text-gray-300">
+                {logPage.items.map((r, i) => (
+                  <li key={i}>
+                    <Time iso={r.at} /> · {r.tool} · {r.outcome}
+                    {r.error_code ? ` (${r.error_code})` : ""}
+                  </li>
                 ))}
                 {!log.rows.length && <li>No calls yet.</li>}
               </ul>
+              <Pagination paged={logPage} label="Access history" />
             </div>
           )}
         </Card>
       </div>
+      <Modal
+        open={!!revoking}
+        onClose={() => setRevoking(null)}
+        tone="danger"
+        title={`Revoke ${revoking?.name ?? ""}?`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRevoking(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={async () => {
+                const r = revoking;
+                setRevoking(null);
+                if (!r) return;
+                try {
+                  await post(`/mcp/tokens/${r.id}/revoke`);
+                  void tokens.reload();
+                } catch (e) {
+                  setError(e as ApiError);
+                }
+              }}
+            >
+              Revoke
+            </Button>
+          </>
+        }
+      >
+        <p className="text-theme-sm text-gray-700 dark:text-gray-300">Clients using this credential stop working immediately. This cannot be undone.</p>
+      </Modal>
     </div>
   );
 }

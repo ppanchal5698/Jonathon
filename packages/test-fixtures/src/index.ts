@@ -60,9 +60,7 @@ export async function drainJobs(app: JonathonApp, types: JobType[] = ["ingest"],
 
 function refFor(app: JonathonApp, projectId: string, text: string, label?: string): SourceRef[] {
   const hit = app.ctx.db
-    .prepare(
-      "SELECT id, source_id, revision_id, locator, content_hash, text FROM chunks WHERE project_id = ? AND kind = 'evidence' AND text LIKE ? LIMIT 1",
-    )
+    .prepare("SELECT id, source_id, revision_id, locator, content_hash, text FROM chunks WHERE project_id = ? AND kind = 'evidence' AND text LIKE ? LIMIT 1")
     .get(projectId, `%${text}%`) as { id: string; source_id: string; revision_id: string; locator: string; content_hash: string; text: string } | undefined;
   if (!hit) return [];
   return [
@@ -85,7 +83,8 @@ function refFor(app: JonathonApp, projectId: string, text: string, label?: strin
 export async function seedDemoProject(app: JonathonApp, user: Extract<Principal, { kind: "user" }>): Promise<{ projectId: string }> {
   const project = app.projects.create(user, {
     name: "Larkspur customer portal (DEMO, fictional)",
-    description: "Fictional demonstration project. Larkspur Home Services is not a real company. Shows evidence, drafts, approvals, a conflict, an unresolved rule and a prompt-injection document.",
+    description:
+      "Fictional demonstration project. Larkspur Home Services is not a real company. Shows evidence, drafts, approvals, a conflict, an unresolved rule and a prompt-injection document.",
     // AI stays off while seeding so ingestion never queues AI interpretation (a running worker would otherwise claim
     // those jobs before they could be cancelled). It is switched on at the end.
     ai_enabled: false,
@@ -112,7 +111,13 @@ export async function seedDemoProject(app: JonathonApp, user: Extract<Principal,
         { text: "After sign-up, the portal sends a verification link to the customer's email address.", basis: "source_stated", review_state: "accepted" },
         { text: "A customer whose email is not verified cannot sign in.", basis: "source_stated", review_state: "accepted" },
       ],
-      acceptance_criteria: [{ text: "Signing in with an unverified email shows a message explaining that verification is required.", basis: "human_authored", review_state: "accepted" }],
+      acceptance_criteria: [
+        {
+          text: "Signing in with an unverified email shows a message explaining that verification is required.",
+          basis: "human_authored",
+          review_state: "accepted",
+        },
+      ],
       open_questions: ["How long the verification link stays valid is not decided (see QUESTION-001)."],
     },
     source_refs: refFor(app, pid, "verify their email address before they can sign in"),
