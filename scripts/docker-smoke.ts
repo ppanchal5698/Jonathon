@@ -162,8 +162,12 @@ async function main() {
   const got = (await client.callTool({ name: "get_requirement", arguments: { project_id: pid, requirement_id: req.human_id } })) as { isError?: boolean };
   check("MCP read in scope", !got.isError);
   await client.close();
-  const restWithBearer = await fetch(`${MCP}/api/v1/projects`, { headers: { authorization: `Bearer ${tok.token}` } });
-  check("MCP token cannot use the REST API", restWithBearer.status === 401);
+  // REST lives behind the UI origin; an MCP token is not a REST credential there.
+  const restWithBearer = await fetch(`${UI}/api/v1/projects`, { headers: { authorization: `Bearer ${tok.token}` } });
+  check("MCP token cannot use the REST API", restWithBearer.status === 401, `status ${restWithBearer.status}`);
+  // The published MCP port is the MCP-only listener: it does not serve the REST API at all.
+  const restOnMcpPort = await fetch(`${MCP}/api/v1/projects`, { headers: { authorization: `Bearer ${tok.token}` } });
+  check("REST API is not served on the MCP port", restOnMcpPort.status === 404, `status ${restOnMcpPort.status}`);
   const mcpViaUi = await fetch(`${UI}/mcp`, {
     method: "POST",
     headers: { authorization: `Bearer ${tok.token}`, "content-type": "application/json" },
