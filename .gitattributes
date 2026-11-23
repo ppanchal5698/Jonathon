@@ -1,0 +1,3 @@
+# Check text files out with LF on every OS, including Windows CI runners,
+# so the Biome format check sees the same line endings everywhere.
+* text=auto eol=lf
